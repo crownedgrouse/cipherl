@@ -7,8 +7,7 @@
 -export([send/2, send/3, send_nosuspend/2, send_nosuspend/3]).
 
 start(_Type, _Args) ->
-    {ok, AppName} = application:get_application(),
-    {ok, _StartedApps} = application:ensure_all_started(AppName),
+    %logger:set_primary_config(level, info),
 	cipherl_sup:start_link().
 
 stop(_State) ->

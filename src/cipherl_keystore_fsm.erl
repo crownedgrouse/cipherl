@@ -7,7 +7,9 @@
 %% gen_statem.
 -export([callback_mode/0]).
 -export([init/1]).
--export([state_name/3]).
+
+-export([monitor_nodes/3]).
+
 -export([handle_event/4]).
 -export([terminate/3]).
 -export([code_change/4]).
@@ -27,10 +29,18 @@ callback_mode() ->
 	state_functions.
 
 init([]) ->
-	{ok, state_name, #state{}}.
+    logger:info("Starting ~p", [?MODULE]),
+	{ok, monitor_nodes, #state{}}.
 
-state_name(_EventType, _EventData, StateData) ->
-	{next_state, state_name, StateData}.
+monitor_nodes({call, {From, Tag}}, EventData, StateData) when is_pid(From)->
+    logger:info("~p~p call received from ~p: ~p", [?MODULE, self(), {From, Tag}, EventData]),
+	{next_state, monitor_nodes, StateData};
+monitor_nodes(cast, EventData, StateData) ->
+    logger:info("~p~p cast received: ~p", [?MODULE, self(), EventData]),
+    {next_state, monitor_nodes, StateData};
+monitor_nodes(info, EventData, StateData) ->
+    logger:info("~p~p info received: ~p", [?MODULE, self(), EventData]),
+    {next_state, monitor_nodes, StateData}.
 
 handle_event(_EventType, _EventData, StateName, StateData) ->
 	{next_state, StateName, StateData}.
