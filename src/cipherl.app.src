@@ -1,0 +1,13 @@
+{application, cipherl,
+ [{description, "Cipher Erlang messages"},
+  {vsn, "1"},
+  {modules, [cipherl
+            ,cipherl_algos_fsm
+            ,cipherl_keystore_fsm
+            ,cipherl_server
+            ,cipherl_sup
+            ]},
+  {registered, []},
+  {applications, [kernel, stdlib, sasl, crypto]},
+  {mod, {cipherl,[]}}
+ ]}.
