@@ -1,4 +1,6 @@
-# cipherl
+# [WIP] cipherl
+
+_note: work in progress, do not use for now_
 
 *cipherl* is an Erlang application allowing exchange of crypted and signed messages between nodes.
 
