@@ -27,6 +27,7 @@ callback_mode() ->
 	state_functions.
 
 init([]) ->
+    erlang:register(cipherl_alg, self()),
 	{ok, state_name, #state{}}.
 
 state_name(_EventType, _EventData, StateData) ->

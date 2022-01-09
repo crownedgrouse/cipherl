@@ -7,7 +7,6 @@
 -export([send/2, send/3, send_nosuspend/2, send_nosuspend/3]).
 
 start(_Type, _Args) ->
-    %logger:set_primary_config(level, info),
 	cipherl_sup:start_link().
 
 stop(_State) ->

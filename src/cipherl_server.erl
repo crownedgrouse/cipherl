@@ -24,6 +24,7 @@ start_link() ->
 %% gen_server.
 
 init([]) ->
+    erlang:register(cipherl_srv, self()),
 	{ok, #state{}}.
 
 handle_call(_Request, _From, State) ->

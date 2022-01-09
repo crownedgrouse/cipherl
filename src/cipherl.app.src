@@ -7,7 +7,7 @@
             ,cipherl_server
             ,cipherl_sup
             ]},
-  {registered, [cipherl]},
-  {applications, [kernel, stdlib, sasl, crypto]},
+  {registered, [cipherl, cipherl_ks, cipherl_alg, cipherl_srv]},
+  {applications, [kernel, stdlib, sasl, crypto, ssh]},
   {mod, {cipherl,[]}}
  ]}.
