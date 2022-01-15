@@ -16,7 +16,12 @@
 
 -export([check_auth/2]).
 
+
+-export([format_status/2]).
+
 -include("cipherl_records.hrl").
+
+-include_lib("public_key/include/public_key.hrl").
 
 %% API.
 
@@ -29,17 +34,29 @@ start_link() ->
 callback_mode() ->
 	state_functions.
 
+%format_status(_, [_PDict, _State, _Data]) -> [] .
+format_status(Opt, [_PDict,_State,_Data]) ->
+
+    case Opt of
+    terminate ->
+        [];
+    normal ->
+        [{data,[{"State",[]}]}]
+    end.
+
 %%-------------------------------------------------------------------------
 %% @doc Init function
 %% @end
 %%-------------------------------------------------------------------------
 init([]) ->
+    erlang:process_flag(trap_exit, true),
     %% TODO let process be sensitive
 
     logger:info("Starting ~p", [?MODULE]),
     erlang:register(cipherl_ks, self()),
     ok = net_kernel:monitor_nodes(true),
     % 
+    crypto:start(),
     Private = 
         case ssh_file:user_key('ssh-rsa', []) of
             {ok, Priv}      -> Priv;
@@ -47,14 +64,9 @@ init([]) ->
                 logger:error("ssh_file:user_key failure: ~p", [Reason]),
                 exit("No private user key found"), []
         end,
-    crypto:start(),
-    Public  = 
-        case crypto:privkey_to_pubkey(rsa, Private) of
-            {error, Err} -> 
-                logger:error("crypto:privkey_to_pubkey failure: ~p", [Err]),
-                exit("No public user key found"), [];
-            Pub -> Pub
-        end,
+    MO = erlang:element(3, Private),
+    PE = erlang:element(4, Private),
+    Public  = #'RSAPublicKey'{modulus=MO, publicExponent=PE},
 
 	{ok, monitor_nodes, #{nodes   => #{}
                          ,pending => #{}
@@ -98,11 +110,12 @@ monitor_nodes(info, {nodedown, Node}, StateData) ->
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {nodeup, Node}, StateData) ->
     Nonce = erlang:monotonic_time(),
-    % Send authenfication challenge to Node
+    % Send authenfication challenge to Noded
     {cipherl_ks, Node} ! hello_msg(StateData),
     % Add node as Pending with nonce expected
-    Map1 = maps:update(maps:get(pending, StateData), Node, Nonce),
+    Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
     NewStateData = maps:merge(StateData, #{pending => Map1}),
+    logger:debug("Updating pending nodes : ~p",[Map1]),
     {next_state, monitor_nodes, NewStateData};
 %%-------------------------------------------------------------------------
 %% @doc 
@@ -160,10 +173,10 @@ hello_msg(State) ->
     Hello = #cipherl_hello{
               node   = node()
             , nonce  = erlang:monotonic_time()
-            , pubkey = maps:get(pubkey, State)
+            , pubkey = maps:get(public, State)
             , algos  = ssh:default_algorithms()
             },
-    logger:debug(Hello),
+    %logger:debug("~p",[Hello]),
     Hello.
 
 %%-------------------------------------------------------------------------
@@ -227,5 +240,5 @@ check_auth(AuthMsg, State)
     end;
 check_auth(AuthMsg, _State) ->
     logger:warning("Invalid auth message record"),
-    logger:debug(AuthMsg),
+    logger:debug("~p",[AuthMsg]),
     false.
