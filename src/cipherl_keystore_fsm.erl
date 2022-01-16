@@ -77,8 +77,33 @@ init([]) ->
 %% @doc Handle calls
 %% @end
 %%-------------------------------------------------------------------------
+monitor_nodes({call, {From, Tag}}, {verify, Msg}, StateData) 
+    when is_record(Msg, cipherl_msg)  ->
+    {cipherl_msg, Node, P, S} = Msg,
+    % Decrypt Payload
+    Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
+    PubKey = get_pubkey_from_node(Node, StateData),
+    case (catch public_key:verify(Bin, sha256, S, PubKey)) of
+        true -> gen_statem:reply({From, Tag}, {ok, Node});
+        X    -> logger:debug("~p", [X]),
+                gen_statem:reply({From, Tag}, error)
+    end,
+    {next_state, monitor_nodes, StateData};
+monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg}, StateData) ->
+    % Get public key of Node
+    PubKey = get_pubkey_from_node(Node, StateData),
+    Bin = erlang:term_to_binary(Msg),
+    % Crypt payload with recipient public key
+    P=public_key:encrypt_public(Bin, PubKey),
+    % Sign payload with local private key
+    S=public_key:sign(Bin, sha256, maps:get(private, StateData)),
+    %
+    CM = #cipherl_msg{node=node(), payload=P, signed=S},
+    gen_statem:reply({From, Tag}, CM),
+    {next_state, monitor_nodes, StateData};
 monitor_nodes({call, {From, Tag}}, EventData, StateData) when is_pid(From)->
     logger:info("~p~p call received from ~p: ~p", [?MODULE, self(), {From, Tag}, EventData]),
+    gen_statem:reply({From, Tag}, unexpected),
 	{next_state, monitor_nodes, StateData};
 
 %%=========================================================================
@@ -299,3 +324,14 @@ rogue(Node) when is_atom(Node),(Node =/= node()) ->
     % Disconnect it
     erlang:disconnect_node(Node);
 rogue(_) -> false.
+
+%%-------------------------------------------------------------------------
+%% @doc Get public Key of a node
+%% @end
+%%-------------------------------------------------------------------------
+get_pubkey_from_node(Node, StateData) ->
+    case Node of
+        Node when (Node =:= node())
+            -> maps:get(public, StateData) ;
+        _   -> maps:get(public, StateData) % TODO
+    end.

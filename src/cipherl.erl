@@ -5,6 +5,7 @@
 -export([stop/1]).
 
 -export([send/2, send/3, send_nosuspend/2, send_nosuspend/3]).
+-export([verify/1]).
 
 start(_Type, _Args) ->
 	cipherl_sup:start_link().
@@ -12,23 +13,57 @@ start(_Type, _Args) ->
 stop(_State) ->
 	ok.
 
-%%% API %%%
+%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-send(_Dest, _Msg)
+send(Dest, Msg)
     ->
-    ok.
+    CM = crypt(Dest, Msg),
+    case CM of
+        error -> error;
+        _     -> erlang:send(Dest, CM),
+                 Msg
+    end.
 
-send(_Dest, _Msg, nosuspend)
+send(Dest, Msg, nosuspend)
     ->
-    ok;
-send(_Dest, _Msg, noconnect)
+    CM = crypt(Dest, Msg),
+    case CM of
+        error -> error;
+        _     -> erlang:send(Dest, CM, nosuspend)
+    end;
+send(Dest, Msg, noconnect)
     ->
-    ok.
+    CM = crypt(Dest, Msg),
+    case CM of
+        error -> error;
+        _     -> erlang:send(Dest, CM, noconnect)
+    end.
 
-send_nosuspend(_Dest, _Msg)
+send_nosuspend(Dest, Msg)
     ->
-    true.
+    CM = crypt(Dest, Msg),
+    case CM of
+        error -> error;
+        _     -> erlang:send_nosuspend(Dest, CM)
+    end.
 
-send_nosuspend(_Dest, _Msg, _Options)
+send_nosuspend(Dest, Msg, Options)
     ->
-    true.
+    CM = crypt(Dest, Msg),
+    case CM of
+        error -> error;
+        _     -> erlang:send_nosuspend(Dest, CM, Options)
+    end.
+
+verify(Msg) ->
+    gen_server:call(cipherl_srv, {verify, Msg}).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+crypt(Dest, Msg)
+    ->    
+    case gen_server:call(cipherl_srv, {crypt, Dest, Msg}) of
+        error      -> error;
+        CM -> CM
+    end.
+

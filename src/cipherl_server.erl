@@ -12,8 +12,12 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
+-export([format_status/2]).
+
 -record(state, {
 }).
+
+-include("cipherl_records.hrl").
 
 %% API.
 
@@ -21,19 +25,45 @@
 start_link() ->
 	gen_server:start_link(?MODULE, [], []).
 
+format_status(Opt, [_PDict,_State,_Data]) ->
+    case Opt of
+    terminate ->
+        hidden;
+    normal ->
+        hidden
+    end.
+
 %% gen_server.
 
 init([]) ->
     erlang:register(cipherl_srv, self()),
 	{ok, #state{}}.
 
-handle_call(_Request, _From, State) ->
+handle_call({verify, Msg}, _From, State) ->
+    Reply = gen_statem:call('cipherl_ks', {verify, Msg}),
+    {reply,Reply,State};
+handle_call({crypt, To, Msg}, _From, State) ->
+    Node = case To of
+                {Reg, N} when is_atom(Reg),is_atom(N) -> N;
+                To when is_atom(To) ->  case whereis(To) of
+                                            undefined -> 'nonode@nohost';
+                                            Pid -> node(Pid)
+                                        end;
+                To when is_pid(To);is_reference(To);is_port(To) -> node(To);
+                _ -> 'nonode@nohost'
+           end,
+    Reply = gen_statem:call('cipherl_ks', {crypt, Node, Msg}),
+    {reply,Reply,State};
+handle_call(Req, From, State) ->
+    logger:info("~p~p call received from ~p: ~p", [?MODULE, self(), From, Req]),
 	{reply, ignored, State}.
 
-handle_cast(_Msg, State) ->
+handle_cast(Msg, State) ->
+    logger:info("~p~p cast received: ~p", [?MODULE, self(), Msg]),
 	{noreply, State}.
 
-handle_info(_Info, State) ->
+handle_info(Info, State) ->
+    logger:info("~p~p info received: ~p", [?MODULE, self(), Info]),
 	{noreply, State}.
 
 terminate(_Reason, _State) ->
