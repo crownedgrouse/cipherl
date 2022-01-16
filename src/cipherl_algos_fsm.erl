@@ -12,6 +12,8 @@
 -export([terminate/3]).
 -export([code_change/4]).
 
+-export([compatible/1]).
+
 -record(state, {
 }).
 
@@ -41,3 +43,9 @@ terminate(_Reason, _StateName, _StateData) ->
 
 code_change(_OldVsn, StateName, StateData, _Extra) ->
 	{ok, StateName, StateData}.
+
+%%-------------------------------------------------------------------------
+%% @doc Check algos are compatible between sender and recipient nodes
+%% @end
+%%-------------------------------------------------------------------------
+compatible(_) -> true.

@@ -34,14 +34,12 @@ start_link() ->
 callback_mode() ->
 	state_functions.
 
-%format_status(_, [_PDict, _State, _Data]) -> [] .
 format_status(Opt, [_PDict,_State,_Data]) ->
-
     case Opt of
     terminate ->
-        [];
+        hidden;
     normal ->
-        [{data,[{"State",[]}]}]
+        hidden
     end.
 
 %%-------------------------------------------------------------------------
@@ -49,11 +47,10 @@ format_status(Opt, [_PDict,_State,_Data]) ->
 %% @end
 %%-------------------------------------------------------------------------
 init([]) ->
-    erlang:process_flag(trap_exit, true),
-    %% TODO let process be sensitive
-
-    logger:info("Starting ~p", [?MODULE]),
+    erlang:process_flag(sensitive, true),
     erlang:register(cipherl_ks, self()),
+    erlang:process_flag(trap_exit, true),
+    logger:info("Starting ~p", [?MODULE]),
     ok = net_kernel:monitor_nodes(true),
     % 
     crypto:start(),
@@ -101,7 +98,8 @@ monitor_nodes(cast, EventData, StateData) ->
 monitor_nodes(info, {nodedown, Node}, StateData) ->
     % Remove node info in state
     Map1 = maps:remove(Node, maps:get(nodes, StateData)),
-    NewStateData = maps:merge(StateData, #{nodes => Map1}),
+    Map2 = maps:remove(Node, maps:get(pending, StateData)),
+    NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
     logger:info("Removing node: ~p", [Node]),
     {next_state, monitor_nodes, NewStateData};
 %%-------------------------------------------------------------------------
@@ -112,6 +110,15 @@ monitor_nodes(info, {nodeup, Node}, StateData) ->
     Nonce = erlang:monotonic_time(),
     % Send authenfication challenge to Noded
     {cipherl_ks, Node} ! hello_msg(StateData),
+    % Start a timer for hello timeout 
+    Time = case net_kernel:get_net_ticktime() of
+                ignore -> 5000 ;
+                {ongoing_change_to, NT} -> NT * 1000 ;
+                NT -> NT * 1000
+           end,
+    {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
+    erlang:put(Node, TRef),
+    logger:info("Start timer - hello_timeout: ~p", [TRef]),
     % Add node as Pending with nonce expected
     Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
     NewStateData = maps:merge(StateData, #{pending => Map1}),
@@ -121,6 +128,34 @@ monitor_nodes(info, {nodeup, Node}, StateData) ->
 %% @doc 
 %% @end
 %%-------------------------------------------------------------------------
+monitor_nodes(info, {hello_timeout, Node}, StateData) ->
+    logger:warning("Hello timeout from node ~p", [Node]),
+    Map1 = maps:remove(Node, maps:get(pending, StateData)),
+    NewStateData = maps:merge(StateData, #{pending => Map1}),
+    {next_state, monitor_nodes, NewStateData};
+monitor_nodes(info, Msg, StateData) 
+    when is_record(Msg, cipherl_auth) 
+    ->
+    try 
+        % Check Node is a pending one
+        Node = erlang:element(2, erlang:element(2, Msg)),
+        case maps:is_key(Node, maps:get(pending, StateData)) of
+            false -> logger:notice("Received auth message for not pending node ~p", [Node]);
+            true  -> % Check it is a valid auth message
+                     true = check_auth(Msg, StateData) 
+        end,
+        % Remove timeout
+        timer:cancel(erlang:get(Node)),
+        % Add node to authentified nodes and remove from pending
+        Nonce = erlang:element(3, erlang:element(2, Msg)),
+        Map1 = maps:put(Node, Nonce, maps:get(nodes, StateData)),
+        Map2 = maps:remove(Node, maps:get(pending, StateData)),
+        NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
+        {next_state, monitor_nodes, NewStateData}
+    catch
+        _ -> logger:error("Invalid auth message received: ~p", [Msg]),
+             {next_state, monitor_nodes, StateData}
+    end;
 monitor_nodes(info, EventData, StateData) ->
     logger:info("~p~p info received: ~p", [?MODULE, self(), EventData]),
     {next_state, monitor_nodes, StateData};
@@ -129,7 +164,7 @@ monitor_nodes(info, EventData, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(EventType, EventData, StateData) ->
-    logger:warning("Unexpected message~nstate: monitor_nodes~nevent: ~p~ndata: ~p~nstate: ~p~n", [EventType, EventData, StateData]),
+    logger:warning("Unexpected message~nstate: monitor_nodes~nevent: ~p~ndata: ~p~n", [EventType, EventData]),
     {next_state, monitor_nodes, StateData}.
 
 %%=========================================================================
@@ -138,7 +173,7 @@ monitor_nodes(EventType, EventData, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 handle_event(EventType, EventData, StateName, StateData) ->
-    io:format("state: ~p~nevent: ~p~ndata: ~p~nstate: ~p~n", [StateName, EventType, EventData, StateData]),
+    logger:warning("Unexpected message~nstate: ~p~nevent: ~p~ndata: ~p~n", [StateName, EventType, EventData]),
 	{next_state, StateName, StateData}.
 
 %%=========================================================================
@@ -176,7 +211,6 @@ hello_msg(State) ->
             , pubkey = maps:get(public, State)
             , algos  = ssh:default_algorithms()
             },
-    %logger:debug("~p",[Hello]),
     Hello.
 
 %%-------------------------------------------------------------------------
@@ -186,10 +220,10 @@ hello_msg(State) ->
 -spec check_auth(tuple(), #{}) -> boolean().
 
 check_auth(AuthMsg, State) 
-    when  is_record(AuthMsg, cipherl_auth, 2)
+    when  is_record(AuthMsg, cipherl_auth)
     ->
     try 
-        {{cipherl_hello, Node, _, PubKey, Algos}, {cipherl_msg, Payload, Signed}} = AuthMsg,
+        {_, {cipherl_hello, Node, _, PubKey, Algos}, {cipherl_msg, Payload, Signed}} = AuthMsg,
         % Check node is a pending one, and get expected nonce
         Nonce =
         case maps:find(pending, State) of
@@ -235,6 +269,7 @@ check_auth(AuthMsg, State)
     catch
         C:E:S -> 
             logger:warning("Invalid auth message : ~p", [E]),
+            logger:info("~p", [AuthMsg]),
             logger:debug("~p:~p:~p", [C, E, S]),
             false
     end;
