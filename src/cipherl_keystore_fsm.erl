@@ -49,7 +49,7 @@ format_status(Opt, [_PDict,_State,_Data]) ->
 init([]) ->
     erlang:process_flag(sensitive, true),
     erlang:register(cipherl_ks, self()),
-    erlang:process_flag(trap_exit, true),
+    %erlang:process_flag(trap_exit, true),
     logger:info("Starting ~p", [?MODULE]),
     ok = net_kernel:monitor_nodes(true),
     % 
@@ -136,13 +136,19 @@ monitor_nodes(info, {hello_timeout, Node}, StateData) ->
 monitor_nodes(info, Msg, StateData) 
     when is_record(Msg, cipherl_auth) 
     ->
+    Node = case (catch erlang:element(2, erlang:element(2, Msg))) of
+                {'EXIT', _} -> 'unknown';
+                X -> X
+            end,
     try 
         % Check Node is a pending one
-        Node = erlang:element(2, erlang:element(2, Msg)),
         case maps:is_key(Node, maps:get(pending, StateData)) of
             false -> logger:notice("Received auth message for not pending node ~p", [Node]);
             true  -> % Check it is a valid auth message
-                     true = check_auth(Msg, StateData) 
+                     case check_auth(Msg, StateData) of
+                        true  -> ok;
+                        false -> throw(invalid_auth_msg)
+                     end
         end,
         % Remove timeout
         timer:cancel(erlang:get(Node)),
@@ -153,7 +159,10 @@ monitor_nodes(info, Msg, StateData)
         NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
         {next_state, monitor_nodes, NewStateData}
     catch
-        _ -> logger:error("Invalid auth message received: ~p", [Msg]),
+        _ -> 
+             logger:error("Invalid auth message received from node: ~p", [Node]),
+             logger:info("Msg: ~p", [Msg]),
+             logger:notice("Disconnecting rogue node: ~p", [rogue(Node)]),
              {next_state, monitor_nodes, StateData}
     end;
 monitor_nodes(info, EventData, StateData) ->
@@ -248,7 +257,7 @@ check_auth(AuthMsg, State)
                  -> logger:debug(Bin),
                    throw(invalid_payload),
                    [];
-            D when is_record(D, cipherl_chal, 3)
+            D when is_record(D, cipherl_chal)
                  -> D;
             D -> logger:debug(D),
                     throw(invalid_response),
@@ -265,15 +274,28 @@ check_auth(AuthMsg, State)
             false  -> ok
         end,
         % Verify signature
-        public_key:verify(Bin, sha256, Signed, PubKey) % TODO hash choice
+        true = public_key:verify(Bin, sha256, Signed, PubKey) % TODO hash choice
     catch
         C:E:S -> 
             logger:warning("Invalid auth message : ~p", [E]),
             logger:info("~p", [AuthMsg]),
-            logger:debug("~p:~p:~p", [C, E, S]),
+            logger:debug("~p:~p:~p", [C, E, erlang:tl(S)]), % Remove function and argument from stacktrace. Private key must be always hidden
             false
     end;
 check_auth(AuthMsg, _State) ->
     logger:warning("Invalid auth message record"),
     logger:debug("~p",[AuthMsg]),
     false.
+
+%%-------------------------------------------------------------------------
+%% @doc Disconnect a Rogue Node
+%% @end
+%%-------------------------------------------------------------------------
+rogue(Node) when is_atom(Node),(Node =/= node()) ->
+    % Set an random cookie to this node
+    erlang:set_cookie(Node, 
+        erlang:list_to_atom(lists:flatten(io_lib:format("~p", 
+        [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})])))),
+    % Disconnect it
+    erlang:disconnect_node(Node);
+rogue(_) -> false.

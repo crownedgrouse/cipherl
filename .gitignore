@@ -1,1 +1,4 @@
 _rel/
+local.mk
+build/
+ebin/
