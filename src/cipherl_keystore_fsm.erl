@@ -51,26 +51,36 @@ init([]) ->
     erlang:register(cipherl_ks, self()),
     %erlang:process_flag(trap_exit, true),
     logger:info("Starting ~p", [?MODULE]),
-    ok = net_kernel:monitor_nodes(true),
-    % 
-    crypto:start(),
-    Private = 
-        case ssh_file:user_key('ssh-rsa', []) of
-            {ok, Priv}      -> Priv;
-            {error, Reason} -> 
-                logger:error("ssh_file:user_key failure: ~p", [Reason]),
-                exit("No private user key found"), []
-        end,
-    MO = erlang:element(3, Private),
-    PE = erlang:element(4, Private),
-    Public  = #'RSAPublicKey'{modulus=MO, publicExponent=PE},
+    try 
+        % Monitor nodes
+        ok = net_kernel:monitor_nodes(true),
+        % Load config
+        Conf = load_config(),
+        % Check security
+        check_security(Conf),
+        % Go on
+        crypto:start(),
+        Private = 
+            case ssh_file:user_key('ssh-rsa', []) of
+                {ok, Priv}      -> Priv;
+                {error, Reason} -> 
+                    logger:error("ssh_file:user_key failure: ~p", [Reason]),
+                    throw("No private user key found"), []
+            end,
+        MO = erlang:element(3, Private),
+        PE = erlang:element(4, Private),
+        Public  = #'RSAPublicKey'{modulus=MO, publicExponent=PE},
 
-	{ok, monitor_nodes, #{nodes   => #{}
-                         ,pending => #{}
-                         ,private => Private
-                         ,public  => Public
-                         }
-    }.
+	    {ok, monitor_nodes, #{nodes   => #{}
+                             ,pending => #{}
+                             ,private => Private
+                             ,public  => Public
+                             ,conf    => Conf
+                             }
+        }
+    catch
+        _:Msg -> exit(Msg)
+    end.
 
 %%=========================================================================
 %%-------------------------------------------------------------------------
@@ -335,3 +345,77 @@ get_pubkey_from_node(Node, StateData) ->
             -> maps:get(public, StateData) ;
         _   -> maps:get(public, StateData) % TODO
     end.
+
+%%-------------------------------------------------------------------------
+%% @doc Load config and set default
+%% @end
+%%-------------------------------------------------------------------------
+
+load_config() ->
+    Default = #{add_host_key => false
+               ,hidden_node  => false
+               ,local_node   => false
+               ,ssh_dir      => any
+               ,ssh_sysdir_override => false
+               ,ssh_userdir_override => false
+               },
+    % Find keys in config, and check validity
+    Keys   = maps:keys(Default),
+    Fun    = fun(K) -> case application:get_env(cipherl, K)  of
+                            undefined -> [] ;
+                            {ok, V} -> [check_conf_type(K, V)]
+                       end
+             end,
+    New    = maps:from_list(lists:flatten(lists:flatmap(Fun, Keys))),
+    Conf = maps:merge(Default, New),
+    Conf.
+
+%%-------------------------------------------------------------------------
+%% @doc Check type and possible values of config parameter
+%% @end
+%%-------------------------------------------------------------------------
+check_conf_type(K = add_host_key, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = add_host_key, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
+check_conf_type(K = hidden_node, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = hidden_node, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
+check_conf_type(K = local_node, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = local_node, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
+check_conf_type(K = ssh_sysdir_override, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = ssh_sysdir_override, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
+check_conf_type(K = ssh_userdir_override, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = ssh_userdir_override, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
+check_conf_type(K = ssh_dir, V) when is_atom(V) 
+    ->  L = [any, sys, user],
+        case lists:member(V, L) of
+            false -> logger:warning("Invalid value for config parameter '~p': expected one of ~p, found ~p", [K, L, V]),
+                     [];
+            true  -> {K, V}
+        end;
+check_conf_type(K = ssh_udir, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
+check_conf_type(K, _) ->
+    logger:error("Unknown config parameter: '~p'", [K]),
+    throw(invalid_config).
+
+
+%%-------------------------------------------------------------------------
+%% @doc Check security regarding config
+%%-------------------------------------------------------------------------
+check_security(_Conf)   % TODO
+    -> ok.
