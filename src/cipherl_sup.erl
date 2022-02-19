@@ -9,6 +9,14 @@ start_link() ->
 
 init([]) ->
 	Procs = [
+    #{id          => event,
+      start       => {gen_event, start_link, [{local, cipherl_event}]},
+      restart     => transient,
+      significant => false,      
+      shutdown    => 5000,
+      type        => worker,
+      modules     => [gen_event]
+    },
     #{id          => algos,
       start       => {cipherl_algos_fsm, start_link, []},
       restart     => transient,

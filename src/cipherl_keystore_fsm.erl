@@ -23,6 +23,12 @@
 
 -include_lib("public_key/include/public_key.hrl").
 
+-ifndef(debug).
+    -define(INIT, erlang:process_flag(sensitive, true)).
+-else.
+    -define(INIT, logger:alert("!!! cipherl started in non safe 'debug' mode !!!")).
+-endif.
+
 %% API.
 
 -spec start_link() -> {ok, pid()}.
@@ -47,7 +53,7 @@ format_status(Opt, [_PDict,_State,_Data]) ->
 %% @end
 %%-------------------------------------------------------------------------
 init([]) ->
-    erlang:process_flag(sensitive, true),
+    ?INIT,
     erlang:register(cipherl_ks, self()),
     %erlang:process_flag(trap_exit, true),
     logger:info("Starting ~p", [?MODULE]),
@@ -56,6 +62,7 @@ init([]) ->
         ok = net_kernel:monitor_nodes(true),
         % Load config
         Conf = load_config(),
+        logger:debug("Config: ~p", [Conf]),
         % Check security
         check_security(Conf),
         % Go on
@@ -355,6 +362,7 @@ load_config() ->
     Default = #{add_host_key => false
                ,hidden_node  => false
                ,local_node   => false
+               ,security_handler => []
                ,ssh_dir      => any
                ,ssh_sysdir_override => false
                ,ssh_userdir_override => false
@@ -389,6 +397,11 @@ check_conf_type(K = local_node, V) when is_boolean(V)
 check_conf_type(K = local_node, _V)  
     ->  logger:warning("Invalid type for config parameter '~p'", [K]),
         [];
+check_conf_type(K = security_handler, V) when is_list(V) 
+    ->  {K, V};
+check_conf_type(K = security_handler, _V)  
+    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
+        [];
 check_conf_type(K = ssh_sysdir_override, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = ssh_sysdir_override, _V)  
@@ -406,9 +419,10 @@ check_conf_type(K = ssh_dir, V) when is_atom(V)
                      [];
             true  -> {K, V}
         end;
-check_conf_type(K = ssh_udir, _V)  
+check_conf_type(K = ssh_dir, _V)  
     ->  logger:warning("Invalid type for config parameter '~p'", [K]),
         [];
+% Note: should never go here as load_config/0 do not care of invalid config parameter
 check_conf_type(K, _) ->
     logger:error("Unknown config parameter: '~p'", [K]),
     throw(invalid_config).
