@@ -2,3 +2,6 @@ _rel/
 local.mk
 build/
 ebin/
+.erlang.mk/
+cipherl.d
+deps/
