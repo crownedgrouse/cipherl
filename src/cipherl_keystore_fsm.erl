@@ -60,13 +60,31 @@ init([]) ->
     try 
         % Monitor nodes
         ok = net_kernel:monitor_nodes(true, [{node_type,all}]),
+        logger:info("Monitoring all node types"),
         % Load config
+        logger:info("Loading configuration"),
         Conf = load_config(),
         logger:debug("Config: ~p", [Conf]),
+        % Add mandatory security handler(s)
+        % See [https://github.com/crownedgrouse/cipherl/wiki/1---Configuration#security_handler]
+        logger:info("Adding mandatory security handler(s)"),
+        SH = maps:get(security_handler, Conf),
+        lists:foreach(fun(M) -> 
+                        case gen_event:add_handler(cipherl_event, M, Conf) of
+                            ok -> 
+                                logger:notice("Mandatory handler added: ~p", [M]);
+                            {_, Reason} -> 
+                                logger:error("Mandatory handler addition failed: ~p", [M]),
+                                logger:debug("Reason: ~p", [Reason]),
+                                throw(mandatory_handler_missing)
+                        end
+                      end, SH),
         % Check security
-        check_security(Conf),
+        ok = check_security(Conf),
+        logger:info("Security check: OK"),
         % Go on
         crypto:start(),
+        logger:info("Loading private key"),
         Private = 
             case ssh_file:user_key('ssh-rsa', []) of
                 {ok, Priv}      -> Priv;
@@ -78,6 +96,7 @@ init([]) ->
         PE = erlang:element(4, Private),
         Public  = #'RSAPublicKey'{modulus=MO, publicExponent=PE},
 
+        logger:notice("~p Init: OK", [?MODULE]),
 	    {ok, monitor_nodes, #{nodes   => #{}
                              ,pending => #{}
                              ,private => Private
@@ -450,6 +469,8 @@ check_conf_type(K, _) ->
 
 %%-------------------------------------------------------------------------
 %% @doc Check security regarding config
+%%      Events will be sent to handlers syncronously with a timeout before
+%%      raising exception, in order to let handlers doing things.
 %%-------------------------------------------------------------------------
 check_security(_Conf)   % TODO
     -> ok.
