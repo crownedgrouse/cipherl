@@ -59,7 +59,7 @@ init([]) ->
     logger:info("Starting ~p", [?MODULE]),
     try 
         % Monitor nodes
-        ok = net_kernel:monitor_nodes(true),
+        ok = net_kernel:monitor_nodes(true, [{node_type,all}]),
         % Load config
         Conf = load_config(),
         logger:debug("Config: ~p", [Conf]),
@@ -137,7 +137,7 @@ monitor_nodes(cast, EventData, StateData) ->
 %% @doc Node down event
 %% @end
 %%-------------------------------------------------------------------------
-monitor_nodes(info, {nodedown, Node}, StateData) ->
+monitor_nodes(info, {nodedown, Node, _}, StateData) ->
     % Remove node info in state
     Map1 = maps:remove(Node, maps:get(nodes, StateData)),
     Map2 = maps:remove(Node, maps:get(pending, StateData)),
@@ -146,26 +146,46 @@ monitor_nodes(info, {nodedown, Node}, StateData) ->
     {next_state, monitor_nodes, NewStateData};
 %%-------------------------------------------------------------------------
 %% @doc Node up event
+%%
+%%    Hidden node can be discarded depending `hidden_node` value. 
+%%    See [https://github.com/crownedgrouse/cipherl/wiki/1---Configuration#hidden_node]
 %% @end
 %%-------------------------------------------------------------------------
-monitor_nodes(info, {nodeup, Node}, StateData) ->
-    Nonce = erlang:monotonic_time(),
-    % Send authenfication challenge to Noded
-    {cipherl_ks, Node} ! hello_msg(StateData),
-    % Start a timer for hello timeout 
-    Time = case net_kernel:get_net_ticktime() of
-                ignore -> 5000 ;
-                {ongoing_change_to, NT} -> NT * 1000 ;
-                NT -> NT * 1000
-           end,
-    {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
-    erlang:put(Node, TRef),
-    logger:info("Start timer - hello_timeout: ~p", [TRef]),
-    % Add node as Pending with nonce expected
-    Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
-    NewStateData = maps:merge(StateData, #{pending => Map1}),
-    logger:debug("Updating pending nodes : ~p",[Map1]),
-    {next_state, monitor_nodes, NewStateData};
+monitor_nodes(info, {nodeup, Node, _}, StateData) ->
+    try
+        Conf = maps:get(conf, StateData),
+        case lists:member(Node, erlang:nodes(hidden)) of
+            true -> case maps:get(hidden_node, Conf) of
+                        false -> throw(hidden);
+                        true  -> ok
+                    end;
+            false -> ok
+        end,
+        Nonce = erlang:monotonic_time(),
+        % Send authenfication challenge to Noded
+        {cipherl_ks, Node} ! hello_msg(StateData),
+        % Start a timer for hello timeout 
+        Time = case net_kernel:get_net_ticktime() of
+                    ignore -> 5000 ;
+                    {ongoing_change_to, NT} -> NT * 1000 ;
+                    NT -> NT * 1000
+               end,
+        {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
+        erlang:put(Node, TRef),
+        logger:info("Start timer - hello_timeout: ~p", [TRef]),
+        % Add node as Pending with nonce expected
+        Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
+        NewStateData = maps:merge(StateData, #{pending => Map1}),
+        logger:debug("Updating pending nodes : ~p",[Map1]),
+        {next_state, monitor_nodes, NewStateData}
+    catch
+        _:hidden -> rogue(Node),
+                    logger:warning("Rejecting hidden node ~p", [Node]),
+                    {next_state, monitor_nodes, StateData};
+        _:R:S    -> logger:error("Error: ~p", [R]),
+                    logger:debug("Stacktrace: ~p", [S]),
+                    {next_state, monitor_nodes, StateData}
+    end;
 %%-------------------------------------------------------------------------
 %% @doc 
 %% @end
