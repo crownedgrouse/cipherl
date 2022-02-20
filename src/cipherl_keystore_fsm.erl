@@ -372,6 +372,8 @@ check_auth(AuthMsg, _State) ->
 %% @doc Disconnect a Rogue Node
 %% @end
 %%-------------------------------------------------------------------------
+-spec rogue(any()) -> boolean().
+
 rogue(Node) when is_atom(Node),(Node =/= node()) ->
     % Set an random cookie to this node
     erlang:set_cookie(Node, 
@@ -396,6 +398,7 @@ get_pubkey_from_node(Node, StateData) ->
 %% @doc Load config and set default
 %% @end
 %%-------------------------------------------------------------------------
+-spec load_config() -> map().
 
 load_config() ->
     Default = #{add_host_key => false
@@ -414,13 +417,15 @@ load_config() ->
                        end
              end,
     New    = maps:from_list(lists:flatten(lists:flatmap(Fun, Keys))),
-    Conf = maps:merge(Default, New),
+    Conf   = maps:merge(Default, New),
     Conf.
 
 %%-------------------------------------------------------------------------
 %% @doc Check type and possible values of config parameter
 %% @end
 %%-------------------------------------------------------------------------
+-spec check_conf_type(atom(), any()) -> ok | tuple() | [] | no_return().
+
 check_conf_type(K = add_host_key, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = add_host_key, _V)  
@@ -472,5 +477,13 @@ check_conf_type(K, _) ->
 %%      Events will be sent to handlers syncronously with a timeout before
 %%      raising exception, in order to let handlers doing things.
 %%-------------------------------------------------------------------------
+-spec check_security(map()) -> ok | no_return().
+
 check_security(_Conf)   % TODO
-    -> ok.
+    -> 
+    % Verify conf did not changed at runtime
+    % Verify all nodes are known
+    % Verify all node are allowed
+    % Verify ssh config
+
+    ok.
