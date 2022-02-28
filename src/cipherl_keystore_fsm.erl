@@ -84,9 +84,22 @@ init([]) ->
         logger:info("Security check: OK"),
         % Go on
         crypto:start(),
+        % Get private key passphrase
+        Passwd = get_passphrase(Conf),
+        PT = case Passwd of
+                [] -> [];
+                {Z, _} -> Z
+             end,
+        % Get ssh key type from config or id found on disk from passphrase type
+        KT = maps:get(ssh_pubkey_alg, Conf, id_found(PT)),
+
+        % Check passphrase type with key type
+        ok = check_types(KT, PT),
+
         logger:info("Loading private key"),
+        % Get private key
         Private = 
-            case ssh_file:user_key('ssh-rsa', []) of
+            case ssh_file:user_key(KT, lists:flatten([Passwd])) of
                 {ok, Priv}      -> Priv;
                 {error, Reason} -> 
                     logger:error("ssh_file:user_key failure: ~p", [Reason]),
@@ -487,3 +500,123 @@ check_security(_Conf)   % TODO
     % Verify ssh config
 
     ok.
+
+%%-------------------------------------------------------------------------
+%% @doc Get private key passphrase
+%%-------------------------------------------------------------------------
+-spec get_passphrase(map()) -> list() | no_return().
+
+get_passphrase(Conf)
+    when is_map(Conf)
+    ->
+    try 
+        % Get mod_passphase
+        MP = maps:get(mod_passphase, Conf, ''),
+        % Check abstract code is not available (either missing or crypted)
+
+        % Check module is of cipherl_passphrase behavior
+
+        % Get password for current node
+        Passwd = MP:passwd(node()),
+        % 
+        ok = remove_module(MP),
+        Passwd
+    catch
+        _:_ -> 
+            logger:error("Passphrase get failed"),
+            throw(passphrase_failure)
+    end. 
+
+%%-------------------------------------------------------------------------
+%% @doc Remove a module
+%%      Module will removed on disk
+%%-------------------------------------------------------------------------
+-spec remove_module(atom()) -> ok | no_return().
+
+remove_module(Module)
+    ->
+    try 
+        % Find path to module file
+        BeamPath = 
+            case code:is_loaded(Module) of
+                {file, L} when is_list(L)
+                          -> L;
+                {file, _} -> "" ;
+                false     -> ""
+            end,
+        % Unload module
+        code:delete(Module),
+        case code:soft_purge(Module) of
+            true  -> ok ;
+            false -> logger:notice("soft purge of '~p' failed due to some process using old code", [Module]),
+                     true = code:purge(Module),
+                     logger:notice("purge of '~p' was forced")
+        end,
+        % Remove beam file on disk
+        case BeamPath of
+            "" -> ok ;
+            P -> case file:delete(P, [raw]) of
+                    {error, R} -> logger:notice("Could not delete file '~p' on disk : ~p", [P,R]),
+                                  throw(delete_failed);
+                    ok -> ok
+                 end
+        end
+    catch
+        _:_ -> 
+            logger:error("Module removing failed : ~p", [Module]),
+            throw(unremoved_module)
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc Check compatibilty of types of key and passphrase
+%%-------------------------------------------------------------------------
+% TODO
+check_types(_KT, _PT) -> ok. 
+
+%%-------------------------------------------------------------------------
+%% @doc Try to return ssh key type from id found on disk
+%%      Mainly useful when no ssh key type is provided in config.
+%%    ecdsa-sha2-nistp384
+%%    ecdsa-sha2-nistp521
+%%    ecdsa-sha2-nistp256
+%%    ssh-ed25519
+%%    ssh-ed448
+%%    rsa-sha2-256
+%%    rsa-sha2-512
+%%
+%%    The following unsecure SHA1 algorithms are supported but disabled by default:
+%%
+%%    (ssh-dss)
+%%    (ssh-rsa)
+%%-------------------------------------------------------------------------
+-spec id_found(atom() | []) -> atom().
+
+id_found([]) -> ''; % Init will fail if ssh key type not in config
+id_found(dsa_pass_phrase) -> id_dsa_found();
+id_found(rsa_pass_phrase) -> id_rsa_found();
+id_found(ecdsa_pass_phrase) -> id_ecdsa_found().
+
+%%-------------------------------------------------------------------------
+%% @doc Seek dsa key and return key type
+%%    USERDIR/id_dsa
+%%    SYSDIR/ssh_host_dsa_key
+%%-------------------------------------------------------------------------
+id_dsa_found() ->
+    todo.
+
+%%-------------------------------------------------------------------------
+%% @doc 
+%%    USERDIR/id_rsa
+%%    SYSDIR/ssh_host_rsa_key
+%%-------------------------------------------------------------------------
+id_rsa_found() ->
+    todo.
+
+%%-------------------------------------------------------------------------
+%% @doc 
+%%    USERDIR/id_ecdsa
+%%    SYSDIR/ssh_host_ecdsa_key
+%%-------------------------------------------------------------------------
+id_ecdsa_found() ->
+    todo.
+
