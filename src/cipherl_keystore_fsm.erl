@@ -84,26 +84,29 @@ init([]) ->
         logger:info("Security check: OK"),
         % Go on
         crypto:start(),
-        % Get private key passphrase
-        Passwd = get_passphrase(Conf),
-        PT = case Passwd of
-                [] -> [];
-                {Z, _} -> Z
-             end,
+        % Get private key passphrase type and passphrase value
+        Passphrase = get_passphrase(Conf),
         % Get ssh key type from config or id found on disk from passphrase type
-        KT = maps:get(ssh_pubkey_alg, Conf, id_found(PT)),
-
-        % Check passphrase type with key type
-        ok = check_types(KT, PT),
+        KT = maps:get(ssh_pubkey_alg, Conf, 'ssh-ecdsa-nistp521'),
+        logger:debug("Private key type: ~p", [KT]),
 
         logger:info("Loading private key"),
+        % Compose ssh_file function argument
+        Userdir   = maps:get(user_dir, Conf, []),
+        Systemdir = maps:get(system_dir, Conf, []),
+        Args      = lists:flatten([Passphrase] ++ [Userdir] ++ [Systemdir]),
+        % Define ssh_file target function
+        Target = case maps:get(ssh_dir, Conf, 'user') of
+                    system -> host_key;
+                    user   -> user_key
+                 end,
         % Get private key
         Private = 
-            case ssh_file:user_key(KT, lists:flatten([Passwd])) of
+            case ssh_file:Target(KT, Args) of
                 {ok, Priv}      -> Priv;
                 {error, Reason} -> 
-                    logger:error("ssh_file:user_key failure: ~p", [Reason]),
-                    throw("No private user key found"), []
+                    logger:error("ssh_file:~p failure: ~p", [Target, Reason]),
+                    throw("No private key found"), []
             end,
         MO = erlang:element(3, Private),
         PE = erlang:element(4, Private),
@@ -418,9 +421,11 @@ load_config() ->
                ,hidden_node  => false
                ,local_node   => false
                ,security_handler => []
-               ,ssh_dir      => any
-               ,ssh_sysdir_override => false
-               ,ssh_userdir_override => false
+               ,ssh_dir      => user
+               ,ssh_pubkey_alg => ''
+               ,ssh_dir_override => false
+               ,user_dir => []
+               ,system_dir => []
                },
     % Find keys in config, and check validity
     Keys   = maps:keys(Default),
@@ -441,48 +446,39 @@ load_config() ->
 
 check_conf_type(K = add_host_key, V) when is_boolean(V) 
     ->  {K, V};
-check_conf_type(K = add_host_key, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
 check_conf_type(K = hidden_node, V) when is_boolean(V) 
     ->  {K, V};
-check_conf_type(K = hidden_node, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
 check_conf_type(K = local_node, V) when is_boolean(V) 
     ->  {K, V};
-check_conf_type(K = local_node, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
 check_conf_type(K = security_handler, V) when is_list(V) 
     ->  {K, V};
-check_conf_type(K = security_handler, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
-check_conf_type(K = ssh_sysdir_override, V) when is_boolean(V) 
+check_conf_type(K = ssh_dir_override, V) when is_boolean(V) 
     ->  {K, V};
-check_conf_type(K = ssh_sysdir_override, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
-check_conf_type(K = ssh_userdir_override, V) when is_boolean(V) 
+check_conf_type(_K = user_dir, V) when is_list(V),(V =:= [])
+    -> [];
+check_conf_type(K = user_dir, V) when is_list(V) 
     ->  {K, V};
-check_conf_type(K = ssh_userdir_override, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
-check_conf_type(K = ssh_dir, V) when is_atom(V) 
-    ->  L = [any, sys, user],
+check_conf_type(_K = system_dir, V) when is_list(V),(V =:= [])
+    -> [];
+check_conf_type(K = system_dir, V) when is_list(V) 
+    ->  {K, V};
+check_conf_type(K = ssh_pubkey_alg, V) when is_atom(V) 
+    ->  L = ssh_pubkey_alg(),
         case lists:member(V, L) of
             false -> logger:warning("Invalid value for config parameter '~p': expected one of ~p, found ~p", [K, L, V]),
                      [];
             true  -> {K, V}
         end;
-check_conf_type(K = ssh_dir, _V)  
-    ->  logger:warning("Invalid type for config parameter '~p'", [K]),
-        [];
-% Note: should never go here as load_config/0 do not care of invalid config parameter
+check_conf_type(K = ssh_dir, V) when is_atom(V) 
+    ->  L = [system, user],
+        case lists:member(V, L) of
+            false -> logger:warning("Invalid value for config parameter '~p': expected one of ~p, found ~p", [K, L, V]),
+                     [];
+            true  -> {K, V}
+        end;
 check_conf_type(K, _) ->
-    logger:error("Unknown config parameter: '~p'", [K]),
-    throw(invalid_config).
+        logger:warning("Invalid type for config parameter '~p'", [K]),
+        [].
 
 
 %%-------------------------------------------------------------------------
@@ -502,6 +498,18 @@ check_security(_Conf)   % TODO
     ok.
 
 %%-------------------------------------------------------------------------
+%% @doc Allowed SSH pubkey algorithms
+%%-------------------------------------------------------------------------
+ssh_pubkey_alg()
+    -> 
+    case lists:keyfind(public_key, 1, ssh:default_algorithms()) of
+         false -> logger:info("No public_key found in ssh:default_algorithms/0"),
+                  [];
+         {public_key, L} -> L       
+    end.
+
+
+%%-------------------------------------------------------------------------
 %% @doc Get private key passphrase
 %%-------------------------------------------------------------------------
 -spec get_passphrase(map()) -> list() | no_return().
@@ -512,15 +520,23 @@ get_passphrase(Conf)
     try 
         % Get mod_passphase
         MP = maps:get(mod_passphase, Conf, ''),
-        % Check abstract code is not available (either missing or crypted)
+        case MP of
+            '' -> "" ;
+            _  -> 
+            % Check abstract code is not available (either missing or crypted)
 
-        % Check module is of cipherl_passphrase behavior
+            % Check module is of cipherl_passphrase behavior
 
-        % Get password for current node
-        Passwd = MP:passwd(node()),
-        % 
-        ok = remove_module(MP),
-        Passwd
+            % Get password for current node
+            Passwd = MP:passwd(node()),
+            case Passwd of
+                {PT, _} -> logger:debug("Passphrase type : ~p", [PT]);
+                _       -> ok
+            end,
+            % 
+            ok = remove_module(MP),
+            Passwd
+        end
     catch
         _:_ -> 
             logger:error("Passphrase get failed"),
@@ -571,52 +587,5 @@ remove_module(Module)
 %% @doc Check compatibilty of types of key and passphrase
 %%-------------------------------------------------------------------------
 % TODO
-check_types(_KT, _PT) -> ok. 
-
-%%-------------------------------------------------------------------------
-%% @doc Try to return ssh key type from id found on disk
-%%      Mainly useful when no ssh key type is provided in config.
-%%    ecdsa-sha2-nistp384
-%%    ecdsa-sha2-nistp521
-%%    ecdsa-sha2-nistp256
-%%    ssh-ed25519
-%%    ssh-ed448
-%%    rsa-sha2-256
-%%    rsa-sha2-512
-%%
-%%    The following unsecure SHA1 algorithms are supported but disabled by default:
-%%
-%%    (ssh-dss)
-%%    (ssh-rsa)
-%%-------------------------------------------------------------------------
--spec id_found(atom() | []) -> atom().
-
-id_found([]) -> ''; % Init will fail if ssh key type not in config
-id_found(dsa_pass_phrase) -> id_dsa_found();
-id_found(rsa_pass_phrase) -> id_rsa_found();
-id_found(ecdsa_pass_phrase) -> id_ecdsa_found().
-
-%%-------------------------------------------------------------------------
-%% @doc Seek dsa key and return key type
-%%    USERDIR/id_dsa
-%%    SYSDIR/ssh_host_dsa_key
-%%-------------------------------------------------------------------------
-id_dsa_found() ->
-    todo.
-
-%%-------------------------------------------------------------------------
-%% @doc 
-%%    USERDIR/id_rsa
-%%    SYSDIR/ssh_host_rsa_key
-%%-------------------------------------------------------------------------
-id_rsa_found() ->
-    todo.
-
-%%-------------------------------------------------------------------------
-%% @doc 
-%%    USERDIR/id_ecdsa
-%%    SYSDIR/ssh_host_ecdsa_key
-%%-------------------------------------------------------------------------
-id_ecdsa_found() ->
-    todo.
+%check_types(_KT, _PT) -> ok. 
 
