@@ -36,6 +36,7 @@ format_status(Opt, [_PDict,_State,_Data]) ->
 %% gen_server.
 
 init([]) ->
+    erlang:process_flag(trap_exit, true),
     erlang:register(cipherl_srv, self()),
 	{ok, #state{}}.
 
@@ -66,7 +67,8 @@ handle_info(Info, State) ->
     logger:info("~p~p info received: ~p", [?MODULE, self(), Info]),
 	{noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    logger:notice("cipherl_srv terminating: ~p", Reason),
 	ok.
 
 code_change(_OldVsn, State, _Extra) ->
