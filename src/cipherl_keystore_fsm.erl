@@ -108,9 +108,8 @@ init([]) ->
                     logger:error("ssh_file:~p failure: ~p", [Target, Reason]),
                     throw("No private key found"), []
             end,
-        MO = erlang:element(3, Private),
-        PE = erlang:element(4, Private),
-        Public  = #'RSAPublicKey'{modulus=MO, publicExponent=PE},
+        % Unfortunately undocumented function !
+        Public = ssh_transport:extract_public_key(Private),
 
         logger:notice("~p Init: OK", [?MODULE]),
 	    {ok, monitor_nodes, #{nodes   => #{}
@@ -490,7 +489,8 @@ check_conf_type(K, _) ->
 
 check_security(_Conf)   % TODO
     -> 
-    % Verify conf did not changed at runtime
+    % Verify that 'mod_passphrase' still unloaded after init
+    % Verify conf did not changed at runtime (except normal 'mod_passphrase' removing)
     % Verify all nodes are known
     % Verify all node are allowed
     % Verify ssh config
@@ -588,4 +588,6 @@ remove_module(Module)
 %%-------------------------------------------------------------------------
 % TODO
 %check_types(_KT, _PT) -> ok. 
+
+
 
