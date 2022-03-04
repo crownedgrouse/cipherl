@@ -29,6 +29,8 @@
     -define(INIT, logger:alert("!!! cipherl started in non safe 'debug' mode !!!")).
 -endif.
 
+% Digest used for message signing
+-define(DIGEST, sha512).
 %% API.
 
 -spec start_link() -> {ok, pid()}.
@@ -134,7 +136,7 @@ monitor_nodes({call, {From, Tag}}, {verify, Msg}, StateData)
     % Decrypt Payload
     Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
     PubKey = get_pubkey_from_node(Node, StateData),
-    case (catch public_key:verify(Bin, sha256, S, PubKey)) of
+    case (catch public_key:verify(Bin, ?DIGEST, S, PubKey)) of
         true -> gen_statem:reply({From, Tag}, {ok, Node});
         X    -> logger:debug("~p", [X]),
                 gen_statem:reply({From, Tag}, error)
@@ -147,7 +149,7 @@ monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg}, StateData) ->
     % Crypt payload with recipient public key
     P=public_key:encrypt_public(Bin, PubKey),
     % Sign payload with local private key
-    S=public_key:sign(Bin, sha256, maps:get(private, StateData)),
+    S=public_key:sign(Bin, ?DIGEST, maps:get(private, StateData)),
     %
     CM = #cipherl_msg{node=node(), payload=P, signed=S},
     gen_statem:reply({From, Tag}, CM),
@@ -370,7 +372,7 @@ check_auth(AuthMsg, State)
             false  -> ok
         end,
         % Verify signature
-        true = public_key:verify(Bin, sha256, Signed, PubKey) % TODO hash choice
+        true = public_key:verify(Bin, ?DIGEST, Signed, PubKey) 
     catch
         C:E:S -> 
             logger:warning("Invalid auth message : ~p", [E]),
