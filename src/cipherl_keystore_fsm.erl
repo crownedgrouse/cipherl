@@ -178,7 +178,7 @@ monitor_nodes(info, {nodedown, Node, _}, StateData) ->
     Map1 = maps:remove(Node, maps:get(nodes, StateData)),
     Map2 = maps:remove(Node, maps:get(pending, StateData)),
     NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
-    logger:info("Removing node: ~p", [Node]),
+    logger:notice("Removing node: ~p", [Node]),
     {next_state, monitor_nodes, NewStateData};
 %%-------------------------------------------------------------------------
 %% @doc Node up event
@@ -190,15 +190,32 @@ monitor_nodes(info, {nodedown, Node, _}, StateData) ->
 monitor_nodes(info, {nodeup, Node, _}, StateData) ->
     try
         Conf = maps:get(conf, StateData),
+        %% Fatal checks
+        % Check hidden_node
         case lists:member(Node, erlang:nodes(hidden)) of
-            true -> case maps:get(hidden_node, Conf) of
-                        false -> throw(hidden);
-                        true  -> ok
-                    end;
+            true -> 
+                case maps:get(hidden_node, Conf) of
+                    false -> throw(hidden);
+                    true  -> ok
+                end;
             false -> ok
         end,
+        % Check add_host_key
+        case maps:get(add_host_key, Conf, false) of
+            true  -> ok ;
+            false -> 
+                % Get hostname from Node
+                 Host = get_host_from_node(Node),
+                 % Check hostname is allowed
+                 case is_hostname_allowed(Host, Conf) of
+                      false -> throw(unauthorized_host);
+                      true  -> ok
+                 end
+        end,
+
+        %% OK we can go further
         Nonce = erlang:monotonic_time(),
-        % Send authenfication challenge to Noded
+        % Send authenfication challenge to Node
         {cipherl_ks, Node} ! hello_msg(StateData),
         % Start a timer for hello timeout 
         Time = case net_kernel:get_net_ticktime() of
@@ -215,7 +232,13 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
         logger:debug("Updating pending nodes : ~p",[Map1]),
         {next_state, monitor_nodes, NewStateData}
     catch
+        _:unauthorized_host ->
+                    rogue(Node),
+                    gen_event:notify(cipherl_event, {unauthorized_host, Node}),
+                    logger:warning("Rejecting node ~p : unauthorized host", [Node]),
+                    {next_state, monitor_nodes, StateData};
         _:hidden -> rogue(Node),
+                    gen_event:notify(cipherl_event, {unauthorized_hidden, Node}),
                     logger:warning("Rejecting hidden node ~p", [Node]),
                     {next_state, monitor_nodes, StateData};
         _:R:S    -> logger:error("Error: ~p", [R]),
@@ -397,7 +420,9 @@ rogue(Node) when is_atom(Node),(Node =/= node()) ->
         erlang:list_to_atom(lists:flatten(io_lib:format("~p", 
         [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})])))),
     % Disconnect it
-    erlang:disconnect_node(Node);
+    erlang:disconnect_node(Node),
+    gen_event:notify(cipherl_event, {rogue_node, Node}),
+    true;
 rogue(_) -> false.
 
 %%-------------------------------------------------------------------------
@@ -592,4 +617,122 @@ remove_module(Module)
 %check_types(_KT, _PT) -> ok. 
 
 
+%%-------------------------------------------------------------------------
+%% @doc Get host from node name
+%%-------------------------------------------------------------------------
+-spec get_host_from_node(node()) -> string().
 
+get_host_from_node(Node)
+    ->
+    case string:split(erlang:atom_to_list(Node), "@") of
+        [_,H] -> H;
+        _     -> "nohost"
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc Check Host is already known in know_hosts
+%%      This is only a first check at hostname, not fingerprint
+%%-------------------------------------------------------------------------
+is_hostname_allowed(Host, Conf)
+    ->
+    File =
+    case maps:get(ssh_dir, Conf) of
+        system -> Dir = maps:get(system_dir, Conf),
+                  filename:join(Dir, "ssh_known_hosts");
+        user   -> Dir = maps:get(user_dir, Conf),
+                  filename:join(Dir, "known_hosts")
+    end,
+    L = decode_known_hosts(File),
+    logger:debug("known_hosts: ~p", [L]),
+    % Get hostnames
+    Hosts = get_from_known_hosts(hosts, L),
+    lists:member(Host, Hosts).
+
+%%-------------------------------------------------------------------------
+%% @doc Extract things from known_hosts
+%% [{ssh2,[<<"hostname">>,
+%%         <<"ecdsa-sha2-nistp521">>,
+%%         <<"AAAAE2VjZHNhL ... xMdMCuapbOg==">>]}]
+%%
+%%      @note For now only 'hosts' argument implemented
+%%-------------------------------------------------------------------------
+get_from_known_hosts(hosts, L)
+    ->
+    lists:flatmap(fun({_, X}) -> [binary_to_list(lists:nth(1, X))] end, L).
+
+%%-------------------------------------------------------------------------
+%% @doc Decode known hosts file
+%%-------------------------------------------------------------------------
+decode_known_hosts(File)
+    ->
+    try 
+        % Check file exists 
+        case filelib:is_regular(File) of
+            true -> ok;
+            false -> throw("Not found")
+        end,
+        % Read file 
+        Bin = 
+        case file:read_file(File) of
+            {ok, B} -> B;
+            {error, Reason} -> throw(Reason), <<"">>
+        end,
+        % Split file line by line
+        Lines = binary:split(Bin, list_to_binary(io_lib:nl()), [trim_all]),
+        lists:flatmap(fun(Line) -> [decode_known_hosts_line(Line)] end, Lines)
+    catch
+        _:R -> logger:error("Error while decoding ~p : ~p", [File, R]),
+               []
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc Decode known hosts file entry (line)
+%%-------------------------------------------------------------------------
+decode_known_hosts_line(Line) ->
+    [First, Rest] = binary:split(Line, <<" ">>, []),
+    [Second, Rest1] = binary:split(Rest, <<" ">>, []),
+
+    case is_bits_field(Second) of
+        true ->
+            {ssh1, decode_known_hosts_ssh1(First, Second, Rest1)};
+        false ->
+            {ssh2, decode_known_hosts_ssh2(First, Second, Rest1)}
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc Decode known_hosts in ssh1 format
+%%-------------------------------------------------------------------------
+decode_known_hosts_ssh1(Hostnames, Bits, Rest) ->
+    [Hostnames, Bits | split_n(2, Rest,  [])].
+
+%%-------------------------------------------------------------------------
+%% @doc Decode known_hosts in ssh2 format
+%%-------------------------------------------------------------------------
+decode_known_hosts_ssh2(Hostnames, KeyType, Rest) ->
+    [Hostnames, KeyType | split_n(1, Rest,  [])].
+
+%%-------------------------------------------------------------------------
+%% @doc Split binary
+%%-------------------------------------------------------------------------
+split_n(0, <<>>, Acc) ->
+    lists:reverse(Acc);
+split_n(0, Bin, Acc) ->
+    lists:reverse([Bin | Acc]);
+split_n(N, Bin, Acc) ->
+    case binary:split(Bin, <<" ">>, []) of
+        [First, Rest] ->
+            split_n(N-1, Rest, [First | Acc]);
+        [Last] ->
+            split_n(0, <<>>, [Last | Acc])
+    end.
+
+%%-------------------------------------------------------------------------
+%% @doc Test if a known_hosts field are bits
+%%-------------------------------------------------------------------------
+is_bits_field(Part) ->
+    try list_to_integer(binary_to_list(Part)) of
+        _ ->
+            true
+    catch _:_ ->
+            false
+    end.
