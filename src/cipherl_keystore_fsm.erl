@@ -514,14 +514,29 @@ check_conf_type(K, _) ->
 %%-------------------------------------------------------------------------
 -spec check_security(map()) -> ok | no_return().
 
-check_security(_Conf)   % TODO
+check_security(Conf)   % TODO
     -> 
     % Verify that 'mod_passphrase' still unloaded after init
-    % Verify conf did not changed at runtime (except normal 'mod_passphrase' removing)
+    PM = maps:get(mod_passphrase, Conf, ''),
+    case code:is_loaded(PM) of
+        false     -> ok;
+        {file, _} -> logger:alert("Passphrase is unsafe : mod_passphrase ~p is loaded", [PM]),
+                     Procs = get_proc_using_mod(PM),
+                     remove_module(PM),
+                     gen_event:notify(cipherl_event, {passphrase_unsafe, Procs}),
+                     logger:notice("Processes using mod_passphrase: ~p", [Procs])
+    end,
+    % Verify conf did not changed at runtime
+    CurConf = load_config(),
+    case ( Conf =:= CurConf) of
+        true  -> ok ;
+        false -> Diff = maps:to_list(CurConf) -- maps:to_list(Conf), 
+                 logger:warning("cipherl configuration changed since init: ~p", [Diff]),
+                 gen_event:notify(cipherl_event, {config_change, Diff})
+    end,
+    % Verify mandatory handlers are still attached to gen_event
     % Verify all nodes are known
     % Verify all node are allowed
-    % Verify ssh config
-
     ok.
 
 %%-------------------------------------------------------------------------
@@ -572,7 +587,6 @@ get_passphrase(Conf)
 
 %%-------------------------------------------------------------------------
 %% @doc Remove a module
-%%      Module will removed on disk
 %%-------------------------------------------------------------------------
 -spec remove_module(atom()) -> ok | no_return().
 
@@ -580,13 +594,13 @@ remove_module(Module)
     ->
     try 
         % Find path to module file
-        BeamPath = 
-            case code:is_loaded(Module) of
-                {file, L} when is_list(L)
-                          -> L;
-                {file, _} -> "" ;
-                false     -> ""
-            end,
+        % BeamPath = 
+        %     case code:is_loaded(Module) of
+        %         {file, L} when is_list(L)
+        %                   -> L;
+        %         {file, _} -> "" ;
+        %         false     -> ""
+        %     end,
         % Unload module
         code:delete(Module),
         case code:soft_purge(Module) of
@@ -594,16 +608,16 @@ remove_module(Module)
             false -> logger:notice("soft purge of '~p' failed due to some process using old code", [Module]),
                      true = code:purge(Module),
                      logger:notice("purge of '~p' was forced")
-        end,
-        % Remove beam file on disk
-        case BeamPath of
-            "" -> ok ;
-            P -> case file:delete(P, [raw]) of
-                    {error, R} -> logger:notice("Could not delete file '~p' on disk : ~p", [P,R]),
-                                  throw(delete_failed);
-                    ok -> ok
-                 end
         end
+        % % Remove beam file on disk
+        % case BeamPath of
+        %     "" -> ok ;
+        %     P -> case file:delete(P, [raw]) of
+        %             {error, R} -> logger:notice("Could not delete file '~p' on disk : ~p", [P,R]),
+        %                           throw(delete_failed);
+        %             ok -> ok
+        %          end
+        % end
     catch
         _:_ -> 
             logger:error("Module removing failed : ~p", [Module]),
@@ -736,3 +750,22 @@ is_bits_field(Part) ->
     catch _:_ ->
             false
     end.
+
+%%-------------------------------------------------------------------------
+%% @doc Get processes using a module
+%%      Mainly for detection of processes using passphrase module
+%%-------------------------------------------------------------------------
+-spec get_proc_using_mod(atom()) -> list().
+
+get_proc_using_mod(Module) when is_atom(Module) ->
+    Fun = fun(X) -> 
+            case (X =:= self()) of
+                true -> ok;
+                false -> 
+                    case (catch sys:get_status(X, 100)) of
+                        {status, Pid,{module, Module}, _} -> [Pid] ;
+                        _  -> []
+                    end
+             end
+        end,
+    lists:flatmap(Fun, elang:processes()).
