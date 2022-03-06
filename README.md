@@ -13,11 +13,11 @@
 
 ## What cipherl provide ?
 
-- Crypted and signed Erlang messages
-- Non repudiation
-- Replay protection against already used messages
-- SSH key passphrase hidding
-- `known_hosts` use and creation (learning mode)
+- Crypted and signed Erlang messages.
+- Non repudiation.
+- Replay protection against already used messages.
+- SSH key passphrase hidding.
+- `known_hosts` use and creation (learning mode).
 
    See complete [Wiki](https://github.com/crownedgrouse/cipherl/wiki).
 
