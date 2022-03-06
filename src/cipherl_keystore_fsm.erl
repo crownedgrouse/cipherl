@@ -67,6 +67,8 @@ init([]) ->
         logger:info("Loading configuration"),
         Conf = load_config(),
         logger:debug("Config: ~p", [Conf]),
+        % Is rpc enabled ?
+        erlang:put(rpc_enabled, maps:get(rpc_enabled, Conf, false)),
         % Add mandatory security handler(s)
         % See [https://github.com/crownedgrouse/cipherl/wiki/1---Configuration#security_handler]
         logger:info("Adding mandatory security handler(s)"),
@@ -142,17 +144,39 @@ monitor_nodes({call, {From, Tag}}, {verify, Msg}, StateData)
                 gen_statem:reply({From, Tag}, error)
     end,
     {next_state, monitor_nodes, StateData};
-monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg}, StateData) ->
-    % Get public key of Node
-    PubKey = get_pubkey_from_node(Node, StateData),
-    Bin = erlang:term_to_binary(Msg),
-    % Crypt payload with recipient public key
-    P=public_key:encrypt_public(Bin, PubKey),
-    % Sign payload with local private key
-    S=public_key:sign(Bin, ?DIGEST, maps:get(private, StateData)),
-    %
-    CM = #cipherl_msg{node=node(), payload=P, signed=S},
-    gen_statem:reply({From, Tag}, CM),
+monitor_nodes({call, {From, Tag}}, {uncrypt, Msg}, StateData) 
+    when is_record(Msg, cipherl_msg)  ->
+    {cipherl_msg, _, P, _} = Msg,
+    Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
+    gen_statem:reply({From, Tag}, Bin),
+    {next_state, monitor_nodes, StateData};
+monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg, Pid}, StateData) ->
+    try     
+        % Check initial call
+        check_initial_call(process_info(Pid, initial_call), erlang:get(rpc_enabled)),
+        % Get public key of Node
+        PubKey = get_pubkey_from_node(Node, StateData),
+        Bin = erlang:term_to_binary(Msg),
+        % Crypt payload with recipient public key
+        P=public_key:encrypt_public(Bin, PubKey),
+        % Sign payload with local private key
+        S=public_key:sign(Bin, ?DIGEST, maps:get(private, StateData)),
+        % Compose cipherl_msg
+        CM = #cipherl_msg{node=node(), payload=P, signed=S},
+        gen_statem:reply({From, Tag}, CM)
+    catch
+        _:rpc_disabled ->
+                ONode = case process_info(Pid, group_leader) of
+                            {group_leader, N} -> N;
+                            _ -> nonode@nohost
+                        end,
+                logger:warning("crypt call for ~p via rpc from ~p and destination ~p failed: rpc_disabled", [Pid, ONode, Node]),
+                gen_event:notify(cipherl_event, {rpc_disabled, {Pid, ONode, Node}}),
+                gen_statem:reply({From, Tag}, {cipherl_error, rpc_disabled});
+        _:R ->  logger:warning("crypt call failed for ~p: ~p", [Pid, R]),
+                gen_event:notify(cipherl_event, {rpc_disabled, {Pid, Node}}),
+                gen_statem:reply({From, Tag}, {cipherl_error, R})
+    end,
     {next_state, monitor_nodes, StateData};
 monitor_nodes({call, {From, Tag}}, EventData, StateData) when is_pid(From)->
     logger:info("~p~p call received from ~p: ~p", [?MODULE, self(), {From, Tag}, EventData]),
@@ -311,8 +335,9 @@ handle_event(EventType, EventData, StateName, StateData) ->
 %% @doc 
 %% @end
 %%-------------------------------------------------------------------------
-terminate(_Reason, _StateName, _StateData) ->
+terminate(Reason, _StateName, _StateData) ->
     net_kernel:monitor_nodes(false),
+    logger:notice("~p terminating: ~p", [?MODULE, Reason]),
 	ok.
 
 %%=========================================================================
@@ -446,6 +471,7 @@ load_config() ->
     Default = #{add_host_key => false
                ,hidden_node  => false
                ,local_node   => false
+               ,rpc_enabled  => false
                ,security_handler => []
                ,ssh_dir      => user
                ,ssh_pubkey_alg => ''
@@ -475,6 +501,8 @@ check_conf_type(K = add_host_key, V) when is_boolean(V)
 check_conf_type(K = hidden_node, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = local_node, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = rpc_enabled, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = security_handler, V) when is_list(V) 
     ->  {K, V};
@@ -769,3 +797,17 @@ get_proc_using_mod(Module) when is_atom(Module) ->
              end
         end,
     lists:flatmap(Fun, elang:processes()).
+
+%%-------------------------------------------------------------------------
+%% @doc Check initial call is allowed
+%%-------------------------------------------------------------------------
+check_initial_call(IC, RPC) 
+    when is_tuple(IC),is_boolean(RPC) ->
+    {initial_call, {M, _F, _A}} = IC,
+    case lists:member(M, [rpc, erpc]) of
+        false -> ok ;
+        true  when (RPC =:= true) -> ok ;
+        _  -> throw(rpc_disabled)
+    end;
+check_initial_call(_, _) ->
+    throw(rpc_disabled).

@@ -38,7 +38,8 @@ state_name(_EventType, _EventData, StateData) ->
 handle_event(_EventType, _EventData, StateName, StateData) ->
 	{next_state, StateName, StateData}.
 
-terminate(_Reason, _StateName, _StateData) ->
+terminate(Reason, _StateName, _StateData) ->
+    logger:notice("~p terminating: ~p", [?MODULE, Reason]),
 	ok.
 
 code_change(_OldVsn, StateName, StateData, _Extra) ->

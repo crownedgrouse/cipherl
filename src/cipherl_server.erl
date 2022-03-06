@@ -43,17 +43,9 @@ init([]) ->
 handle_call({verify, Msg}, _From, State) ->
     Reply = gen_statem:call('cipherl_ks', {verify, Msg}),
     {reply,Reply,State};
-handle_call({crypt, To, Msg}, _From, State) ->
-    Node = case To of
-                {Reg, N} when is_atom(Reg),is_atom(N) -> N;
-                To when is_atom(To) ->  case whereis(To) of
-                                            undefined -> 'nonode@nohost';
-                                            Pid -> node(Pid)
-                                        end;
-                To when is_pid(To);is_reference(To);is_port(To) -> node(To);
-                _ -> 'nonode@nohost'
-           end,
-    Reply = gen_statem:call('cipherl_ks', {crypt, Node, Msg}),
+handle_call({crypt, To, Msg, Pid}, _From, State) ->
+    Node = safe_whereis(To),
+    Reply = gen_statem:call('cipherl_ks', {crypt, Node, Msg, Pid}),
     {reply,Reply,State};
 handle_call(Req, From, State) ->
     logger:info("~p~p call received from ~p: ~p", [?MODULE, self(), From, Req]),
@@ -68,8 +60,23 @@ handle_info(Info, State) ->
 	{noreply, State}.
 
 terminate(Reason, _State) ->
-    logger:notice("cipherl_srv terminating: ~p", Reason),
+    logger:notice("~p terminating: ~p", [?MODULE, Reason]),
 	ok.
 
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
+
+
+%%-------------------------------------------------------------------------
+%% @doc Get (and ensure) node from Destination Pid
+%%-------------------------------------------------------------------------
+safe_whereis(To) ->
+    case To of
+        {Reg, N} when is_atom(Reg),is_atom(N) -> N;
+        To when is_atom(To) ->  case whereis(To) of
+                                    undefined -> 'nonode@nohost';
+                                    Pid -> node(Pid)
+                                end;
+        To when is_pid(To);is_reference(To);is_port(To) -> node(To);
+        _ -> 'nonode@nohost'
+   end.
