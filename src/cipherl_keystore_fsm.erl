@@ -153,7 +153,7 @@ monitor_nodes({call, {From, Tag}}, {uncrypt, Msg}, StateData)
 monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg, Pid}, StateData) ->
     try     
         % Check initial call
-        check_initial_call(process_info(Pid, initial_call), erlang:get(rpc_enabled)),
+        check_initial_call(Node, process_info(Pid, initial_call), erlang:get(rpc_enabled), maps:get(pending, StateData)),
         % Get public key of Node
         PubKey = get_pubkey_from_node(Node, StateData),
         Bin = erlang:term_to_binary(Msg),
@@ -249,7 +249,7 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                end,
         {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
         erlang:put(Node, TRef),
-        logger:info("Start timer - hello_timeout: ~p", [TRef]),
+        logger:debug("Start timer - hello_timeout: ~p", [TRef]),
         % Add node as Pending with nonce expected
         Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
         NewStateData = maps:merge(StateData, #{pending => Map1}),
@@ -801,13 +801,20 @@ get_proc_using_mod(Module) when is_atom(Module) ->
 %%-------------------------------------------------------------------------
 %% @doc Check initial call is allowed
 %%-------------------------------------------------------------------------
-check_initial_call(IC, RPC) 
-    when is_tuple(IC),is_boolean(RPC) ->
+-spec check_initial_call(atom(), tuple(), boolean(), map()) -> ok | no_return().
+
+check_initial_call(Node, IC, RPC, Pendings) 
+    when is_atom(Node),is_tuple(IC),is_boolean(RPC),is_map(Pendings) ->
     {initial_call, {M, _F, _A}} = IC,
     case lists:member(M, [rpc, erpc]) of
         false -> ok ;
-        true  when (RPC =:= true) -> ok ;
+        true  when (RPC =:= true) ->
+            % Check Node is not pending
+            case maps:is_key(Node, Pendings) of
+                false -> ok ;
+                true  -> throw(rpc_disabled)
+            end;
         _  -> throw(rpc_disabled)
     end;
-check_initial_call(_, _) ->
+check_initial_call(_, _, _, _) ->
     throw(rpc_disabled).
