@@ -27,7 +27,8 @@ stop(_State) ->
             false -> ok
         end
         end, LogHandlers),
-    logger:alert("cipherl stopped").
+    logger:alert("cipherl stopped"),
+    c:flush().
 
 %%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
