@@ -4,6 +4,7 @@
   {modules, [cipherl
             ,cipherl_algos_fsm
             ,cipherl_keystore_fsm
+            ,cipherl_passphrase
             ,cipherl_server
             ,cipherl_sup
             ]},

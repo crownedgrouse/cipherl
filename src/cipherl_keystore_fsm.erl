@@ -249,7 +249,7 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                end,
         {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
         erlang:put(Node, TRef),
-        logger:debug("Start timer - hello_timeout: ~p", [TRef]),
+        logger:debug("Start ~p ms timer - hello_timeout: ~p", [Time, TRef]),
         % Add node as Pending with nonce expected
         Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
         NewStateData = maps:merge(StateData, #{pending => Map1}),
@@ -270,7 +270,7 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                     {next_state, monitor_nodes, StateData}
     end;
 %%-------------------------------------------------------------------------
-%% @doc 
+%% @doc Receive timeout while challenge is running
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {hello_timeout, Node}, StateData) ->
@@ -278,6 +278,10 @@ monitor_nodes(info, {hello_timeout, Node}, StateData) ->
     Map1 = maps:remove(Node, maps:get(pending, StateData)),
     NewStateData = maps:merge(StateData, #{pending => Map1}),
     {next_state, monitor_nodes, NewStateData};
+%%-------------------------------------------------------------------------
+%% @doc Treat auth message
+%% @end
+%%-------------------------------------------------------------------------
 monitor_nodes(info, Msg, StateData) 
     when is_record(Msg, cipherl_auth) 
     ->
@@ -285,10 +289,11 @@ monitor_nodes(info, Msg, StateData)
                 {'EXIT', _} -> 'unknown';
                 X -> X
             end,
+    Conf = maps:get(conf, StateData),
     try 
         % Check Node is a pending one
         case maps:is_key(Node, maps:get(pending, StateData)) of
-            false -> logger:notice("Received auth message for not pending node ~p", [Node]);
+            false -> throw(unexpected_auth_msg) ;
             true  -> % Check it is a valid auth message
                      case check_auth(Msg, StateData) of
                         true  -> ok;
@@ -297,14 +302,41 @@ monitor_nodes(info, Msg, StateData)
         end,
         % Remove timeout
         timer:cancel(erlang:get(Node)),
+        % Add host is required
+        case maps:get(add_host_key, Conf, false) of
+            false  -> ok ;
+            true -> 
+                % Get hostname from Node
+                Host = get_host_from_node(Node),
+                %
+                Port = 4369, % Empd port TODO
+                Key  = get_pubkey_from_auth(Msg),
+                % set user_dir
+                UD = case maps:get(user_dir) of
+                         [] -> [];
+                         D  -> {user_dir, D}
+                     end,
+                Options = lists:flatten([UD]),
+                case ssh_file:add_host_key(Host, Port, Key, Options) of
+                    ok -> ok;
+                    {error, T} -> 
+                        logger:debug({error, T}),
+                        throw(add_host_key_failure)
+                end
+        end,
         % Add node to authentified nodes and remove from pending
-        Nonce = erlang:element(3, erlang:element(2, Msg)),
+        Nonce = get_nonce_from_auth(Msg),
         Map1 = maps:put(Node, Nonce, maps:get(nodes, StateData)),
         Map2 = maps:remove(Node, maps:get(pending, StateData)),
         NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
         {next_state, monitor_nodes, NewStateData}
     catch
-        _ -> 
+        _:add_host_key_failure -> 
+             logger:error("Failure while adding host key for node: ~p", [Node]);
+        _:unexpected_auth_msg  -> 
+             logger:notice("Received auth message for not pending node: ~p", [Node]),
+             {next_state, monitor_nodes, StateData};
+        _:invalid_auth_msg -> 
              logger:error("Invalid auth message received from node: ~p", [Node]),
              logger:info("Msg: ~p", [Msg]),
              logger:notice("Disconnecting rogue node: ~p", [rogue(Node)]),
@@ -369,7 +401,7 @@ hello_msg(State) ->
     Hello.
 
 %%-------------------------------------------------------------------------
-%% @doc Forge a Hello message
+%% @doc Check a auth message
 %% @end
 %%-------------------------------------------------------------------------
 -spec check_auth(tuple(), #{}) -> boolean().
@@ -454,12 +486,39 @@ rogue(_) -> false.
 %% @doc Get public Key of a node
 %% @end
 %%-------------------------------------------------------------------------
-get_pubkey_from_node(Node, StateData) ->
+get_pubkey_from_node(Node, StateData)
+     ->
     case Node of
         Node when (Node =:= node())
             -> maps:get(public, StateData) ;
         _   -> maps:get(public, StateData) % TODO
     end.
+%%-------------------------------------------------------------------------
+%% @doc Get public Key from auth message
+%% @end
+%%-------------------------------------------------------------------------
+-spec get_nonce_from_auth(tuple()) -> any().
+
+get_nonce_from_auth(Msg)
+    when  is_record(Msg, cipherl_auth)
+    ->
+    {cipherl_auth, H, _} = Msg,
+    {cipherl_hello, _, Nonce, _, _} = H,
+    Nonce.
+
+%%-------------------------------------------------------------------------
+%% @doc Get public Key from auth message
+%% @end
+%%-------------------------------------------------------------------------
+-spec get_pubkey_from_auth(tuple()) -> any().
+
+get_pubkey_from_auth(Msg)
+    when  is_record(Msg, cipherl_auth)
+    ->
+    {cipherl_auth, H, _} = Msg,
+    {cipherl_hello, _, _, PubKey, _} = H,
+    PubKey.
+
 
 %%-------------------------------------------------------------------------
 %% @doc Load config and set default
