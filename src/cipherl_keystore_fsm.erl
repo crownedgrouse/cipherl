@@ -1,3 +1,11 @@
+%%%-------------------------------------------------------------------
+%%% File:      cipherl_keystore_fsm.erl
+%%% @author    Eric Pailleau <cipherl@crownedgrouse.com>
+%%% @copyright 2022 crownedgrouse.com
+%%% @doc
+%%% Cipherl keystore finite state machine
+%%% @end
+%%%
 -module(cipherl_keystore_fsm).
 -behaviour(gen_statem).
 

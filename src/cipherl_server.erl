@@ -1,3 +1,11 @@
+%%%-------------------------------------------------------------------
+%%% File:      cipherl_server.erl
+%%% @author    Eric Pailleau <cipherl@crownedgrouse.com>
+%%% @copyright 2022 crownedgrouse.com
+%%% @doc
+%%% Cipherl supervisor
+%%% @end
+%%%
 -module(cipherl_server).
 -behaviour(gen_server).
 

@@ -1,3 +1,11 @@
+%%%-------------------------------------------------------------------
+%%% File:      cipherl_sup.erl
+%%% @author    Eric Pailleau <cipherl@crownedgrouse.com>
+%%% @copyright 2022 crownedgrouse.com
+%%% @doc
+%%% Cipherl supervisor
+%%% @end
+%%%
 -module(cipherl_sup).
 -behaviour(supervisor).
 
@@ -7,6 +15,10 @@
 start_link() ->
 	supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+%%-------------------------------------------------------------------------
+%% @doc supervisor init
+%% @end
+%%-------------------------------------------------------------------------
 init([]) ->
 	Procs = [
     #{id          => event,

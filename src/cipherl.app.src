@@ -1,6 +1,6 @@
 {application, cipherl,
  [{description, "Cipher Erlang messages"},
-  {vsn, "1"},
+  {vsn, "0.1.0"},
   {modules, [cipherl
             ,cipherl_algos_fsm
             ,cipherl_keystore_fsm
