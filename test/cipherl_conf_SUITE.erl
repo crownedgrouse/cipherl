@@ -1,15 +1,32 @@
 %%%-------------------------------------------------------------------
- %%% File    : cipherl_conf_SUITE.erl
- %%% Author  : 
- %%% Description : 
- %%%
- %%% Created : 
- %%%-------------------------------------------------------------------
+%%% File: cipherl_conf_SUITE.erl
+%%% @author    Eric Pailleau <cipherl@crownedgrouse.com>
+%%% @copyright 2022 crownedgrouse.com
+%%% @doc
+%%% Cipherl common tests - configuration suite.
+%%% @end
+%%%-------------------------------------------------------------------
  -module(cipherl_conf_SUITE).
 
  -compile([nowarn_export_all,export_all]).
 
  -include_lib("common_test/include/ct.hrl").
+
+ -on_load(onload/0).
+
+-define(ERROR_REL, "cipherl common test requires 'peer' module, available starting OTP-25.").
+%% Requires 'peer' module available starting OTP-25
+-ifdef(OTP_RELEASE).
+  %% OTP 25 or higher
+  -if(?OTP_RELEASE >= 25).
+     onload() -> ok.
+  -else.
+     onload() -> erlang:display(?ERROR_REL), error.
+  -endif.
+-else.
+  %% OTP 20 or lower.
+     onload() -> erlang:display(?ERROR_REL), error.
+-endif.
 
  %%--------------------------------------------------------------------
  %% Function: suite() -> Info
@@ -121,17 +138,17 @@
  %% Info = [tuple()]
  %%--------------------------------------------------------------------
 add_host_key_true_ok() 
-     ->  test_case_common([]).
+     ->  test_case_common([{default_config, cipherl, [{add_host_key, true}]}]).
 add_host_key_true_ko() 
-     ->  test_case_common([]).
+     ->  test_case_common([{default_config, cipherl, [{add_host_key, true}]}]).
 add_host_key_false_ok() 
-     ->  test_case_common([]).
+     ->  test_case_common([{default_config, cipherl, [{add_host_key, false}]}]).
 add_host_key_false_ko() 
-     ->  test_case_common([]).
+     ->  test_case_common([{default_config, cipherl, [{add_host_key, false}]}]).
 hidden_node_true() 
-     ->  test_case_common([]).
+     ->  test_case_common([{default_config, cipherl, [{hidden_node, true}]}]).
 hidden_node_false() 
-     ->  test_case_common([]).
+     ->  test_case_common([{default_config, cipherl, [{hidden_node, false}]}]).
 mod_passphrase_none_ok() 
      ->  test_case_common([]).
 mod_passphrase_none_ko() 
@@ -177,6 +194,7 @@ user_dir_ko()
 test_case_common(X) ->
     I = [{timetrap,{seconds,60}}
         ,{require, cipherl}
+        ,{default_config, cipherl, []}
         ], 
     Fun = fun(T, Acc) -> { [], lists:keyreplace(erlang:element(1,T), 1, lists:sort(Acc), T)} end,
     {_, TC}= lists:mapfoldl(Fun, I, X),

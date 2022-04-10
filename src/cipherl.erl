@@ -1,3 +1,11 @@
+%%%-------------------------------------------------------------------
+%%% File: cipherl.erl
+%%% @author    Eric Pailleau <cipherl@crownedgrouse.com>
+%%% @copyright 2022 crownedgrouse.com
+%%% @doc
+%%% Cipherl application
+%%% @end
+%%%
 -module(cipherl).
 -behaviour(application).
 
