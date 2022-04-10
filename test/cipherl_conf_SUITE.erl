@@ -14,6 +14,10 @@
 
  -on_load(onload/0).
 
+-define('_'(A, B), io_lib:format(A, B)).
+
+-define(value(Key,Config), proplists:get_value(Key,Config)).
+
 -define(ERROR_REL, "cipherl common test requires 'peer' module, available starting OTP-25.").
 %% Requires 'peer' module available starting OTP-25
 -ifdef(OTP_RELEASE).
@@ -41,8 +45,12 @@
  %% Config0 = Config1 = [tuple()]
  %% Reason = term()
  %%--------------------------------------------------------------------
- init_per_suite(Config) ->
-     Config.
+ init_per_suite(Config) -> 
+     L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
+     Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
+     RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
+     ct:pal(?_("SSH Key Type: ~p", [RandSshType])),
+     [{sshtype, RandSshType} | Config].
 
  %%--------------------------------------------------------------------
  %% Function: end_per_suite(Config0) -> term() | {save_config,Config1}
@@ -208,7 +216,9 @@ test_case_common(X) ->
  %% Reason = term()
  %% Comment = term()
  %%--------------------------------------------------------------------
-add_host_key_true_ok(_Config) ->  ok.
+add_host_key_true_ok(Config) ->  
+    ct:print(io_lib:format("~p", [Config])),
+    ok.
 add_host_key_true_ko(_Config) ->  ok.
 add_host_key_false_ok(_Config) ->  ok.
 add_host_key_false_ko(_Config) ->  ok.
