@@ -31,6 +31,18 @@
 
 -include_lib("public_key/include/public_key.hrl").
 
+-ifdef(OTP_RELEASE).
+  %% OTP 25 or higher : function documented
+  -if(?OTP_RELEASE >= 25).
+    -define(PUBKEY(X), ssh_file:extract_public_key(X)).
+  -else.
+    -define(PUBKEY(X), ssh_transport:extract_public_key(X)).
+  -endif.
+-else.
+  %% OTP 20 or lower.
+    -define(PUBKEY(X), ssh_transport:extract_public_key(X)).
+-endif.
+
 -ifndef(debug).
     -define(INIT, erlang:process_flag(sensitive, true)).
 -else.
@@ -121,7 +133,7 @@ init([]) ->
                     throw("No private key found"), []
             end,
         % Unfortunately undocumented function !
-        Public = ssh_transport:extract_public_key(Private),
+        Public = ?PUBKEY(Private),
 
         logger:notice("~p Init: OK", [?MODULE]),
 	    {ok, monitor_nodes, #{nodes   => #{}
@@ -241,7 +253,8 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                  % Check hostname is allowed
                  case is_hostname_allowed(Host, Conf) of
                       false -> throw(unauthorized_host);
-                      true  -> ok
+                      true  -> logger:info("Host ~p was found in 'know_hosts'", [Host]),
+                               ok
                  end
         end,
 
@@ -741,6 +754,7 @@ get_host_from_node(Node)
 %%-------------------------------------------------------------------------
 %% @doc Check Host is already known in know_hosts
 %%      This is only a first check at hostname, not fingerprint
+%%      !!! should handle "hostname,127.0.1.1" syntax in known_hosts
 %%-------------------------------------------------------------------------
 is_hostname_allowed(Host, Conf)
     ->
@@ -755,11 +769,18 @@ is_hostname_allowed(Host, Conf)
     logger:debug("known_hosts: ~p", [L]),
     % Get hostnames
     Hosts = get_from_known_hosts(hosts, L),
-    lists:member(Host, Hosts).
+    case lists:member(Host, Hosts) of
+        true -> true ;
+        false -> 
+            Pred = fun(X) -> N = string:split(X, ","),
+                             lists:member(Host, N)
+                   end,
+            lists:any(Pred, Hosts)
+    end.
 
 %%-------------------------------------------------------------------------
 %% @doc Extract things from known_hosts
-%% [{ssh2,[<<"hostname">>,
+%% [{ssh2,[<<"hostname">>,  
 %%         <<"ecdsa-sha2-nistp521">>,
 %%         <<"AAAAE2VjZHNhL ... xMdMCuapbOg==">>]}]
 %%

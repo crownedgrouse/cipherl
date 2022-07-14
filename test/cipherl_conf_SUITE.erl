@@ -46,10 +46,30 @@
  %% Reason = term()
  %%--------------------------------------------------------------------
  init_per_suite(Config) -> 
-     L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
+     ct:print(io_lib:format("Suite config  : ~p", [Config])),
+    % L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
+     L = [rsa],
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
      ct:pal(?_("SSH Key Type: ~p", [RandSshType])),
+     application:stop(ssh),
+     application:set_env([  {kernel,
+                                [ {logger_level, all}
+                                ,{logger,
+                                    [{handler, default, logger_std_h,
+                                    #{ formatter => {logger_formatter, #{ }}}}]
+                                 }
+                                ]
+                            },
+                            {ssh, [{modify_algorithms, 
+                                  [{append, [{kex,['diffie-hellman-group1-sha1']}]}
+                                  ,{prepend, [{public_key,['ssh-rsa']}]}
+                                  ]
+                                  }
+                                ]
+                            }
+                        ]),
+     application:start(ssh),
      [{sshtype, RandSshType} | Config].
 
  %%--------------------------------------------------------------------
@@ -66,7 +86,8 @@
  %% Config0 = Config1 = [tuple()]
  %% Reason = term()
  %%--------------------------------------------------------------------
- init_per_group(_GroupName, Config) ->
+ init_per_group(GroupName, Config) ->
+    ct:print(io_lib:format("Group config ~p : ~p", [GroupName, Config])),
      Config.
 
  %%--------------------------------------------------------------------
@@ -85,7 +106,8 @@
  %% Config0 = Config1 = [tuple()]
  %% Reason = term()
  %%--------------------------------------------------------------------
- init_per_testcase(_TestCase, Config) ->
+ init_per_testcase(TestCase, Config) ->
+     ct:pal(?_("Testcase config ~p : ~p", [TestCase, Config])),
      Config.
 
  %%--------------------------------------------------------------------
@@ -206,6 +228,7 @@ test_case_common(X) ->
         ], 
     Fun = fun(T, Acc) -> { [], lists:keyreplace(erlang:element(1,T), 1, lists:sort(Acc), T)} end,
     {_, TC}= lists:mapfoldl(Fun, I, X),
+    %ct:pal(?_("Debug : ~p", [TC])),
     TC.
 
  %%--------------------------------------------------------------------
@@ -217,7 +240,35 @@ test_case_common(X) ->
  %% Comment = term()
  %%--------------------------------------------------------------------
 add_host_key_true_ok(Config) ->  
-    ct:print(io_lib:format("~p", [Config])),
+    application:stop(cipherl),
+    ST = proplists:get_value(sshtype, Config),
+    AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
+    BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
+    PK = pkmap(ST),
+
+    % Add Bob's pubkey in known_hosts
+    file:delete(filename:join(AD, "known_hosts")),
+    active_key(AD, ST),
+    active_key(BD, ST),
+    {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
+    BPubKey = ssh_file:extract_public_key(BPrivKey),
+    ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
+
+    % Set config for Alice
+    Conf = ct:get_config(cipherl) ++ [{user_dir, AD}
+                                     ,{ssh_pubkey_alg, PK}
+                                     ],
+    ct:pal(?_("Cipherl config : ~p", [Conf])),
+ 
+    ok = application:set_env([{cipherl, Conf}]),
+    {ok, _} = application:ensure_all_started(cipherl),
+
+    % Starting Bob
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => close, peer_down => continue}),
+    ct:print(io_lib:format("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
+    peer:stop(Peer),
+    unactive_key(AD, ST),
+    unactive_key(BD, ST),
     ok.
 add_host_key_true_ko(_Config) ->  ok.
 add_host_key_false_ok(_Config) ->  ok.
@@ -243,3 +294,54 @@ ssh_pubkey_alg_missing(_Config) ->  ok.
 ssh_pubkey_alg_invalid(_Config) ->  ok.
 user_dir_ok(_Config) ->  ok.
 user_dir_ko(_Config) ->  ok.
+
+
+%%  'ecdsa-sha2-nistp384','ecdsa-sha2-nistp521',
+%%  'ecdsa-sha2-nistp256','ssh-rsa','rsa-sha2-256',
+%%  'rsa-sha2-512','ssh-dss'
+pkmap(rsa)           -> 'ssh-rsa' ;
+pkmap('dsa.1024')    -> 'ssh-dss' ;
+pkmap('ecdsa.256')   -> 'ecdsa-sha2-nistp256' ;
+pkmap('ecdsa.384')   -> 'ecdsa-sha2-nistp384' ;
+pkmap('ecdsa.521')   -> 'ecdsa-sha2-nistp521' ;
+pkmap('ecdsa.25519') -> 'ssh-ed25519' ;
+pkmap(X)   -> ct:pal(?_("pkmap arg not found: ~p", [X])),
+              exit(1).
+
+
+active_key(Dir, rsa)
+    -> ok = active_key(key_path(Dir, "id_rsa.key"));
+active_key(_, X)
+    -> ct:pal(?_("active_key arg not found: ~p", [X])),
+       exit(1).
+
+active_key(File)
+    -> Link = link_path(File),
+       ct:pal(?_("Making symlink ~p -> ~p", [File, Link])),
+       case file:make_symlink(File, Link) of
+            ok -> ok;
+            {error, eexist} -> ok ;
+            E -> E
+       end.
+
+unactive_key(Dir, rsa)
+    -> ok = unactive_key(key_path(Dir, "id_rsa.key"));
+unactive_key(_, X)
+    -> ct:pal(?_("unactive_key arg not found: ~p", [X])),
+       exit(1).
+
+
+unactive_key(FileOrLink)
+    -> case  filelib:is_regular(FileOrLink) of
+            true  -> unactive_key(link_path(FileOrLink)) ;
+            false -> case filelib:is_file(FileOrLink) of
+                        false -> ok;
+                        true  -> file:delete(FileOrLink)
+                     end
+       end.
+
+key_path(Dir, File)
+    -> filename:join([Dir, File]).
+
+link_path(KeyPath)
+    -> filename:join(filename:dirname(KeyPath), filename:basename(KeyPath, filename:extension(KeyPath))).
