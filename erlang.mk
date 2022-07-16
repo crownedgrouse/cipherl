@@ -17,7 +17,7 @@
 ERLANG_MK_FILENAME := $(realpath $(lastword $(MAKEFILE_LIST)))
 export ERLANG_MK_FILENAME
 
-ERLANG_MK_VERSION = 2020.03.05-35-gd80984c
+ERLANG_MK_VERSION = 8a5c11e
 ERLANG_MK_WITHOUT = 
 
 # Make 3.81 and 3.82 are deprecated.
@@ -4959,9 +4959,12 @@ endef
 define dep_autopatch_appsrc_script.erl
 	AppSrc = "$(call core_native_path,$(DEPS_DIR)/$1/src/$1.app.src)",
 	AppSrcScript = AppSrc ++ ".script",
-	{ok, Conf0} = file:consult(AppSrc),
+	Conf1 = case file:consult(AppSrc) of
+		{ok, Conf0} -> Conf0;
+		{error, enoent} -> []
+	end,
 	Bindings0 = erl_eval:new_bindings(),
-	Bindings1 = erl_eval:add_binding('CONFIG', Conf0, Bindings0),
+	Bindings1 = erl_eval:add_binding('CONFIG', Conf1, Bindings0),
 	Bindings = erl_eval:add_binding('SCRIPT', AppSrcScript, Bindings1),
 	Conf = case file:script(AppSrcScript, Bindings) of
 		{ok, [C]} -> C;
@@ -6722,7 +6725,7 @@ export DIALYZER_PLT
 
 PLT_APPS ?=
 DIALYZER_DIRS ?= --src -r $(wildcard src) $(ALL_APPS_DIRS)
-DIALYZER_OPTS ?= -Werror_handling -Wrace_conditions -Wunmatched_returns # -Wunderspecs
+DIALYZER_OPTS ?= -Werror_handling -Wunmatched_returns # -Wunderspecs
 DIALYZER_PLT_OPTS ?=
 
 # Core targets.
@@ -7467,7 +7470,7 @@ endif
 RELX ?= $(ERLANG_MK_TMP)/relx
 RELX_CONFIG ?= $(CURDIR)/relx.config
 
-RELX_URL ?= https://erlang.mk/res/relx-v3.27.0
+RELX_URL ?= https://erlang.mk/res/relx-v3.27.0-22
 RELX_OPTS ?=
 RELX_OUTPUT_DIR ?= _rel
 RELX_REL_EXT ?=
@@ -7505,6 +7508,7 @@ relx-rel: $(RELX) rel-deps app
 	$(verbose) $(RELX) $(if $(filter 1,$V),-V 3) -c $(RELX_CONFIG) $(RELX_OPTS) release
 	$(verbose) $(MAKE) relx-post-rel
 ifeq ($(RELX_TAR),1)
+	$(verbose) touch $(RELX_OUTPUT_DIR)/$(PROJECT)_release/releases/RELEASES
 	$(verbose) $(RELX) $(if $(filter 1,$V),-V 3) -c $(RELX_CONFIG) $(RELX_OPTS) tar
 endif
 

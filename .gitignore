@@ -5,3 +5,4 @@ ebin/
 .erlang.mk/
 cipherl.d
 deps/
+test/*.beam
