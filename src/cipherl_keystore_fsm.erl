@@ -51,6 +51,20 @@
 
 % Digest used for message signing
 -define(DIGEST, sha512).
+
+% 
+-ifdef(TEST).
+    % Do not really disconnect node for common tests, to allow clean peer:stop/1 .
+    -define(DISCONNECT(Node),logger:info("cipherl would have disconnect node ~p", [Node])).
+    -warning("Compiling specially for common tests. Do not use in production.").
+-else.
+    % Disconnect it
+    -define(DISCONNECT(Node),
+        erlang:set_cookie(Node, 
+            erlang:list_to_atom(lists:flatten(io_lib:format("~p", 
+            [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})])))),
+        erlang:disconnect_node(Node)).
+-endif.
 %% API.
 
 -spec start_link() -> {ok, pid()}.
@@ -119,6 +133,7 @@ init([]) ->
         Userdir   = maps:get(user_dir, Conf, []),
         Systemdir = maps:get(system_dir, Conf, []),
         Args      = lists:flatten([Passphrase] ++ [Userdir] ++ [Systemdir]),
+        logger:debug("Args: ~p", [Args]),
         % Define ssh_file target function
         Target = case maps:get(ssh_dir, Conf, 'user') of
                     system -> host_key;
@@ -132,7 +147,6 @@ init([]) ->
                     logger:error("ssh_file:~p failure: ~p", [Target, Reason]),
                     throw("No private key found"), []
             end,
-        % Unfortunately undocumented function !
         Public = ?PUBKEY(Private),
 
         logger:notice("~p Init: OK", [?MODULE]),
@@ -144,7 +158,9 @@ init([]) ->
                              }
         }
     catch
-        _:Msg -> exit(Msg)
+        _:Msg:Stack -> 
+            logger:error("Error : ~p~n~p", [Msg,Stack]),
+            exit(Msg)
     end.
 
 %%=========================================================================
@@ -254,6 +270,7 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                  case is_hostname_allowed(Host, Conf) of
                       false -> throw(unauthorized_host);
                       true  -> logger:info("Host ~p was found in 'know_hosts'", [Host]),
+                               gen_event:notify(cipherl_event, {authorized_host, Node}),
                                ok
                  end
         end,
@@ -494,11 +511,7 @@ check_auth(AuthMsg, _State) ->
 
 rogue(Node) when is_atom(Node),(Node =/= node()) ->
     % Set an random cookie to this node
-    erlang:set_cookie(Node, 
-        erlang:list_to_atom(lists:flatten(io_lib:format("~p", 
-        [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})])))),
-    % Disconnect it
-    erlang:disconnect_node(Node),
+    ?DISCONNECT(node),
     gen_event:notify(cipherl_event, {rogue_node, Node}),
     true;
 rogue(_) -> false.

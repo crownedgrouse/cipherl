@@ -46,7 +46,7 @@
  %% Reason = term()
  %%--------------------------------------------------------------------
  init_per_suite(Config) -> 
-     ct:print(io_lib:format("Suite config  : ~p", [Config])),
+    %ct:print(io_lib:format("Suite config  : ~p", [Config])),
     % L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
      L = [rsa],
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
@@ -86,8 +86,8 @@
  %% Config0 = Config1 = [tuple()]
  %% Reason = term()
  %%--------------------------------------------------------------------
- init_per_group(GroupName, Config) ->
-    ct:print(io_lib:format("Group config ~p : ~p", [GroupName, Config])),
+ init_per_group(_GroupName, Config) ->
+    %ct:print(io_lib:format("Group config ~p : ~p", [_GroupName, Config])),
      Config.
 
  %%--------------------------------------------------------------------
@@ -106,8 +106,8 @@
  %% Config0 = Config1 = [tuple()]
  %% Reason = term()
  %%--------------------------------------------------------------------
- init_per_testcase(TestCase, Config) ->
-     ct:pal(?_("Testcase config ~p : ~p", [TestCase, Config])),
+ init_per_testcase(_TestCase, Config) ->
+     %ct:pal(?_("Testcase config ~p : ~p", [_TestCase, Config])),
      Config.
 
  %%--------------------------------------------------------------------
@@ -118,6 +118,7 @@
  %% Reason = term()
  %%--------------------------------------------------------------------
  end_per_testcase(_TestCase, _Config) ->
+     application:stop(cipherl),
      ok.
 
  %%--------------------------------------------------------------------
@@ -153,14 +154,14 @@
  %%--------------------------------------------------------------------
  all() -> 
      [{group, add_host_key}
-     ,{group, hidden_node}
-     ,{group, mod_passphrase}
-     ,{group, rpc_enabled}
-     ,{group, security_handler}
-     ,{group, system_dir}
-     ,{group, ssh_dir}
-     ,{group, ssh_pubkey_alg}
-     ,{group, user_dir}
+     %,{group, hidden_node}
+     %,{group, mod_passphrase}
+     %,{group, rpc_enabled}
+     %,{group, security_handler}
+     %,{group, system_dir}
+     %,{group, ssh_dir}
+     %,{group, ssh_pubkey_alg}
+     %,{group, user_dir}
      ].
 
  %%--------------------------------------------------------------------
@@ -240,7 +241,6 @@ test_case_common(X) ->
  %% Comment = term()
  %%--------------------------------------------------------------------
 add_host_key_true_ok(Config) ->  
-    application:stop(cipherl),
     ST = proplists:get_value(sshtype, Config),
     AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
     BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
@@ -258,15 +258,24 @@ add_host_key_true_ok(Config) ->
     Conf = ct:get_config(cipherl) ++ [{user_dir, AD}
                                      ,{ssh_pubkey_alg, PK}
                                      ],
-    ct:pal(?_("Cipherl config : ~p", [Conf])),
+    ct:log(?_("Cipherl config : ~p", [Conf])),
  
     ok = application:set_env([{cipherl, Conf}]),
     {ok, _} = application:ensure_all_started(cipherl),
+    % Add handler
+    ok = gen_event:add_sup_handler(cipherl_event, cipherl_ct_sec_handler, []),
+    gen_event:sync_notify(cipherl_event, {pid, self()}),
 
     % Starting Bob
-    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => close, peer_down => continue}),
-    ct:print(io_lib:format("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
-    peer:stop(Peer),
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash}),
+    %ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
+
+    receive 
+        {authorized_host, Node} 
+            -> ct:pal(?_("~p was authorized in known_hosts", [Node])),
+               peer:stop(Peer)
+    after 5000 -> ct:print("Timeout"), exit(?FUNCTION_NAME)
+    end,
     unactive_key(AD, ST),
     unactive_key(BD, ST),
     ok.
@@ -317,7 +326,7 @@ active_key(_, X)
 
 active_key(File)
     -> Link = link_path(File),
-       ct:pal(?_("Making symlink ~p -> ~p", [File, Link])),
+       %ct:pal(?_("Making symlink ~p -> ~p", [File, Link])),
        case file:make_symlink(File, Link) of
             ok -> ok;
             {error, eexist} -> ok ;
@@ -332,16 +341,14 @@ unactive_key(_, X)
 
 
 unactive_key(FileOrLink)
-    -> case  filelib:is_regular(FileOrLink) of
-            true  -> unactive_key(link_path(FileOrLink)) ;
-            false -> case filelib:is_file(FileOrLink) of
-                        false -> ok;
-                        true  -> file:delete(FileOrLink)
-                     end
+    -> case  file:read_link(FileOrLink) of
+              {error,_} -> unactive_key(link_path(FileOrLink)) ;
+              {ok, _}   -> file:delete(FileOrLink)
        end.
 
 key_path(Dir, File)
     -> filename:join([Dir, File]).
 
 link_path(KeyPath)
-    -> filename:join(filename:dirname(KeyPath), filename:basename(KeyPath, filename:extension(KeyPath))).
+    -> 
+      filename:join(filename:dirname(KeyPath), filename:basename(KeyPath, filename:extension(KeyPath))).
