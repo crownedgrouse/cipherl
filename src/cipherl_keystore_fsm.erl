@@ -44,9 +44,9 @@
 -endif.
 
 -ifndef(debug).
-    -define(INIT, erlang:process_flag(sensitive, true)).
+    -define(INITD, erlang:process_flag(sensitive, true)).
 -else.
-    -define(INIT, logger:alert("!!! cipherl started in non safe 'debug' mode !!!")).
+    -define(INITD, logger:alert("!!! cipherl started in non safe 'debug' mode !!!")).
 -endif.
 
 % Digest used for message signing
@@ -57,6 +57,7 @@
     % Do not really disconnect node for common tests, to allow clean peer:stop/1 .
     -define(DISCONNECT(Node),logger:info("cipherl would have disconnect node ~p", [Node])).
     -warning("Compiling specially for common tests. Do not use in production.").
+    -define(INITT,logger:warning("!!! Compiled for common tests. Do not use in production.")).
 -else.
     % Disconnect it
     -define(DISCONNECT(Node),
@@ -64,6 +65,7 @@
             erlang:list_to_atom(lists:flatten(io_lib:format("~p", 
             [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})])))),
         erlang:disconnect_node(Node)).
+    -define(INITT,ok).
 -endif.
 %% API.
 
@@ -89,7 +91,8 @@ format_status(Opt, [_PDict,_State,_Data]) ->
 %% @end
 %%-------------------------------------------------------------------------
 init([]) ->
-    ?INIT,
+    ?INITD,
+    ?INITT,
     erlang:register(cipherl_ks, self()),
     %erlang:process_flag(trap_exit, true),
     logger:info("Starting ~p", [?MODULE]),
