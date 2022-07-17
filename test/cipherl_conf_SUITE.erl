@@ -86,6 +86,21 @@
  %% Config0 = Config1 = [tuple()]
  %% Reason = term()
  %%--------------------------------------------------------------------
+ init_per_group(add_host_key, Config)
+    ->
+    ST = proplists:get_value(sshtype, Config),
+    AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
+    BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
+    PK = pkmap(ST),
+
+    % Add Bob's pubkey in known_hosts
+    file:delete(filename:join(AD, "known_hosts")),
+    active_key(AD, ST),
+    active_key(BD, ST),
+    {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
+    BPubKey = ssh_file:extract_public_key(BPrivKey),
+    ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
+    Config ++ [{cipherl_ct, [{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
  init_per_group(_GroupName, Config) ->
     %ct:print(io_lib:format("Group config ~p : ~p", [_GroupName, Config])),
      Config.
@@ -96,8 +111,16 @@
  %% GroupName = atom()
  %% Config0 = Config1 = [tuple()]
  %%--------------------------------------------------------------------
- end_per_group(_GroupName, _Config) ->
-     ok.
+ end_per_group(add_host_key, Config)
+    ->
+    ST = proplists:get_value(sshtype, Config),
+    AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
+    BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
+    unactive_key(AD, ST),
+    unactive_key(BD, ST),
+    ok;
+ end_per_group(_GroupName, _Config) 
+    -> ok.
 
  %%--------------------------------------------------------------------
  %% Function: init_per_testcase(TestCase, Config0) ->
@@ -240,48 +263,41 @@ test_case_common(X) ->
  %% Reason = term()
  %% Comment = term()
  %%--------------------------------------------------------------------
-add_host_key_true_ok(Config) ->  
-    ST = proplists:get_value(sshtype, Config),
-    AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
-    BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
-    PK = pkmap(ST),
-
-    % Add Bob's pubkey in known_hosts
-    file:delete(filename:join(AD, "known_hosts")),
-    active_key(AD, ST),
-    active_key(BD, ST),
-    {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
-    BPubKey = ssh_file:extract_public_key(BPrivKey),
-    ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
-
+add_host_key_true_ok(_Config) ->  
+    ct:comment("Alice add Bob's public key in known_hosts and allow Bob to connect"),
+    % remove current known_hosts created by init_per_group
+    % stop cipherl at Alice
+    % start a peer Bob
+    % launch cipherl at Bob side with config
+    % start cipherl at Alice
+    % verify Bob is recorded in known_host
+    % verify Bob is allowed to connect
+    ok.
+add_host_key_true_ko(_Config) ->  
+    ct:comment("Alice do not add Bob in known_hosts due to invalid public key"),
+    ok.
+add_host_key_false_ok(Config) -> 
+    ct:comment("Alice has Bob's public key already recorded and allow Bob to try authentication"),
     % Set config for Alice
-    Conf = ct:get_config(cipherl) ++ [{user_dir, AD}
-                                     ,{ssh_pubkey_alg, PK}
-                                     ],
-    ct:log(?_("Cipherl config : ~p", [Conf])),
- 
-    ok = application:set_env([{cipherl, Conf}]),
-    {ok, _} = application:ensure_all_started(cipherl),
-    % Add handler
-    ok = gen_event:add_sup_handler(cipherl_event, cipherl_ct_sec_handler, []),
-    gen_event:sync_notify(cipherl_event, {pid, self()}),
-
-    % Starting Bob
+    Conf = ct:get_config(cipherl) ++ proplists:get_value(cipherl_ct, Config, []),
+    %ct:log(?_("Cipherl config : ~p", [Conf])),
+    start_with_handler(Conf),
+    % Starting Bob 
     {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash}),
     %ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
 
     receive 
         {authorized_host, Node} 
             -> ct:pal(?_("~p was authorized in known_hosts", [Node])),
-               peer:stop(Peer)
-    after 5000 -> ct:print("Timeout"), exit(?FUNCTION_NAME)
+               peer:stop(Peer);
+        Other 
+            -> ct:fail({unexpected_msg, Other})
+    after 5000 -> ct:fail(timeout)
     end,
-    unactive_key(AD, ST),
-    unactive_key(BD, ST),
     ok.
-add_host_key_true_ko(_Config) ->  ok.
-add_host_key_false_ok(_Config) ->  ok.
-add_host_key_false_ko(_Config) ->  ok.
+add_host_key_false_ko(_Config) ->  
+    ct:comment("Alice has Bob's public key already recorded and refuse connection to Bob due to invalid challenge"),
+    ok.
 hidden_node_true(_Config) ->  ok.
 hidden_node_false(_Config) ->  ok.
 mod_passphrase_none_ok(_Config) ->  ok.
@@ -304,10 +320,11 @@ ssh_pubkey_alg_invalid(_Config) ->  ok.
 user_dir_ok(_Config) ->  ok.
 user_dir_ko(_Config) ->  ok.
 
-
-%%  'ecdsa-sha2-nistp384','ecdsa-sha2-nistp521',
-%%  'ecdsa-sha2-nistp256','ssh-rsa','rsa-sha2-256',
-%%  'rsa-sha2-512','ssh-dss'
+%%%%%%%%%%%%%%%%%%%%%%%%% LOCAL FUNCTIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%-------------------------------------------------------------------------
+%% @doc Map private key filename to public key also
+%% @end
+%%-------------------------------------------------------------------------
 pkmap(rsa)           -> 'ssh-rsa' ;
 pkmap('dsa.1024')    -> 'ssh-dss' ;
 pkmap('ecdsa.256')   -> 'ecdsa-sha2-nistp256' ;
@@ -317,7 +334,10 @@ pkmap('ecdsa.25519') -> 'ssh-ed25519' ;
 pkmap(X)   -> ct:pal(?_("pkmap arg not found: ~p", [X])),
               exit(1).
 
-
+%%-------------------------------------------------------------------------
+%% @doc 
+%% @end
+%%-------------------------------------------------------------------------
 active_key(Dir, rsa)
     -> ok = active_key(key_path(Dir, "id_rsa.key"));
 active_key(_, X)
@@ -333,6 +353,10 @@ active_key(File)
             E -> E
        end.
 
+%%-------------------------------------------------------------------------
+%% @doc 
+%% @end
+%%-------------------------------------------------------------------------
 unactive_key(Dir, rsa)
     -> ok = unactive_key(key_path(Dir, "id_rsa.key"));
 unactive_key(_, X)
@@ -346,9 +370,26 @@ unactive_key(FileOrLink)
               {ok, _}   -> file:delete(FileOrLink)
        end.
 
+%%-------------------------------------------------------------------------
+%% @doc 
+%% @end
+%%-------------------------------------------------------------------------
 key_path(Dir, File)
     -> filename:join([Dir, File]).
 
 link_path(KeyPath)
     -> 
       filename:join(filename:dirname(KeyPath), filename:basename(KeyPath, filename:extension(KeyPath))).
+
+%%-------------------------------------------------------------------------
+%% @doc 
+%% @end
+%%-------------------------------------------------------------------------
+start_with_handler(Conf)
+    ->
+    ok = application:set_env([{cipherl, Conf}]),
+    {ok, _} = application:ensure_all_started(cipherl),
+    % Add handler
+    ok = gen_event:add_sup_handler(cipherl_event, cipherl_ct_sec_handler, []),
+    gen_event:sync_notify(cipherl_event, {pid, self()}),
+    ok.
