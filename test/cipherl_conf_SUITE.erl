@@ -88,6 +88,7 @@
  %%--------------------------------------------------------------------
  init_per_group(add_host_key, Config)
     ->
+    ct:comment("<a href='https://github.com/crownedgrouse/cipherl/wiki/1---Configuration#add_host_key'>add_host_key</a>"),
     ST = proplists:get_value(sshtype, Config),
     AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
     BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
