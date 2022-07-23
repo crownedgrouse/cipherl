@@ -46,29 +46,35 @@
  %% Reason = term()
  %%--------------------------------------------------------------------
  init_per_suite(Config) -> 
-    %ct:print(io_lib:format("Suite config  : ~p", [Config])),
-    % L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
+     %ct:print(io_lib:format("Suite config  : ~p", [Config])),
+     % L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
      L = [rsa],
+     % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
      ct:pal(?_("SSH Key Type: ~p", [RandSshType])),
+     % Compile Bob's passphrase module
+     Macro = pktype(RandSshType),
+     {ok, _} = c:c(cipherl_bobsecret, [{debug_info_key,"bobsecretpassphrase"},{d, 'KEYTYPE', Macro}]),
+     % Configure applications
      application:stop(ssh),
-     application:set_env([  {kernel,
-                                [ {logger_level, all}
-                                ,{logger,
-                                    [{handler, default, logger_std_h,
-                                    #{ formatter => {logger_formatter, #{ }}}}]
-                                 }
-                                ]
-                            },
-                            {ssh, [{modify_algorithms, 
-                                  [{append, [{kex,['diffie-hellman-group1-sha1']}]}
-                                  ,{prepend, [{public_key,['ssh-rsa']}]}
-                                  ]
-                                  }
-                                ]
-                            }
-                        ]),
+     application:set_env([  
+        {kernel,
+                [ {logger_level, all}
+                ,{logger,
+                    [{handler, default, logger_std_h,
+                    #{ formatter => {logger_formatter, #{ }}}}]
+                 }
+                ]
+            },
+            {ssh, [{modify_algorithms, 
+                  [{append, [{kex,['diffie-hellman-group1-sha1']}]}
+                  ,{prepend, [{public_key,['ssh-rsa']}]}
+                  ]
+                  }
+                ]
+            }
+        ]),
      application:start(ssh),
      [{sshtype, RandSshType} | Config].
 
@@ -264,14 +270,36 @@ test_case_common(X) ->
  %% Reason = term()
  %% Comment = term()
  %%--------------------------------------------------------------------
-add_host_key_true_ok(_Config) ->  
+add_host_key_true_ok(Config) ->  
     ct:comment("Alice add Bob's public key in known_hosts and allow Bob to connect"),
     % remove current known_hosts created by init_per_group
+    AD = proplists:get_value(user_dir, Config),
+    file:delete(filename:join(AD, "known_hosts")),
     % stop cipherl at Alice
+    application:stop(cipherl),
     % start a peer Bob
-    % launch cipherl at Bob side with config
-    % start cipherl at Alice
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash, connection => standard_io}),
+    % Affect current cookie to Bob
+    peer:call(Peer, erlang, set_cookie, [erlang:get_cookie()]),
+    % launch cipherl at Bob side with a config set before
+    PKA = proplists:get_value(ssh_pubkey_alg, Config),
+    BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
+    _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD]),
+    _C2 = peer:call(Peer, application, set_env, [cipherl, ssh_pubkey_alg, PKA]),
+    _C3 = peer:call(Peer, application, set_env, [cipherl, mod_passphrase, 'cipherl_bobsecret']),
+    _C4 = peer:call(Peer, code, add_path, [filename:dirname(code:where_is_file("cipherl.app"))]),
+    BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
+    ct:pal(?_("Cipherl start at Bob side: ~p", [BS])),
+    % start cipherl at Alice    
+    Conf = ct:get_config(cipherl) ++ proplists:get_value(cipherl_ct, Config, []),
+    start_with_handler(Conf),
     % verify Bob is recorded in known_host
+    receive 
+        {authorized_host, Node} 
+            -> ct:pal(?_("~p was authorized in known_hosts", [Node]));
+        Other 
+            -> ct:pal(?_("Received : ~p", [Other]))
+    end,
     % verify Bob is allowed to connect
     ok.
 add_host_key_true_ko(_Config) ->  
@@ -334,6 +362,18 @@ pkmap('ecdsa.521')   -> 'ecdsa-sha2-nistp521' ;
 pkmap('ecdsa.25519') -> 'ssh-ed25519' ;
 pkmap(X)   -> ct:pal(?_("pkmap arg not found: ~p", [X])),
               exit(1).
+
+%%-------------------------------------------------------------------------
+%% @doc Map public key to compilation macro for passphase
+%% @end
+%%-------------------------------------------------------------------------
+pktype('ssh-rsa') -> rsa;
+pktype('ssh-dss') -> dsa;
+pktype('ecdsa-sha2-nistp256') -> ecdsa;
+pktype('ecdsa-sha2-nistp384') -> ecdsa;
+pktype('ecdsa-sha2-nistp521') -> ecdsa;
+pktype(_) -> none.
+
 
 %%-------------------------------------------------------------------------
 %% @doc 
