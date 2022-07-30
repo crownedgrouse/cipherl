@@ -55,7 +55,15 @@
      ct:pal(?_("SSH Key Type: ~p", [RandSshType])),
      % Compile Bob's passphrase module
      Macro = pktype(RandSshType),
-     {ok, _} = c:c(cipherl_bobsecret, [{debug_info_key,"bobsecretpassphrase"},{d, 'KEYTYPE', Macro}]),
+     Path  = code:where_is_file("cipherl_bobsecret.erl"),
+     Dir   = filename:dirname(Path),
+     File  = filename:join(Dir, filename:basename(Path, ".erl")),
+     case compile:file(File, [{debug_info_key,"bobsecretpassphrase"},{d, 'KEYTYPE', Macro}, return_errors,{outdir, Dir}]) of
+        {error, ErrorList, WarningList} -> ct:pal(?_("Compilating ~p :~nErros: ~p~nWarnings: ~p", [File, ErrorList, WarningList])),
+                                         ct:fail(cipherl_bobsecret);
+        {ok, _} -> ok
+     end,
+     
      % Configure applications
      application:stop(ssh),
      application:set_env([  
@@ -272,27 +280,42 @@ test_case_common(X) ->
  %%--------------------------------------------------------------------
 add_host_key_true_ok(Config) ->  
     ct:comment("Alice add Bob's public key in known_hosts and allow Bob to connect"),
+    ct:pal(?_("~p", [ct:get_config(cipherl)])),
+    Conf = ct:get_config(cipherl) ++ proplists:get_value(cipherl_ct, Config, []),
+    ct:pal(?_("Config: ~p", [Conf])),
     % remove current known_hosts created by init_per_group
-    AD = proplists:get_value(user_dir, Config),
-    file:delete(filename:join(AD, "known_hosts")),
+    AD = proplists:get_value(user_dir, Conf),
+    KH = filename:join(AD, "known_hosts"),
+    file:delete(KH),
+    file:write_file(KH, ""),
+    file:change_mode(KH, 8#00644),
     % stop cipherl at Alice
     application:stop(cipherl),
     % start a peer Bob
     {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash, connection => standard_io}),
-    % Affect current cookie to Bob
-    peer:call(Peer, erlang, set_cookie, [erlang:get_cookie()]),
     % launch cipherl at Bob side with a config set before
-    PKA = proplists:get_value(ssh_pubkey_alg, Config),
+    PKA = proplists:get_value(ssh_pubkey_alg, Conf),
+    ct:pal(?_("pubkey: ~p", [PKA])),
     BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
-    _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD]),
-    _C2 = peer:call(Peer, application, set_env, [cipherl, ssh_pubkey_alg, PKA]),
-    _C3 = peer:call(Peer, application, set_env, [cipherl, mod_passphrase, 'cipherl_bobsecret']),
+    _C0 = peer:call(Peer, application, set_env, [cipherl, ssh_dir, user, [{persistent, true}]]),
+    _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD, [{persistent, true}]]),
+    _C2 = peer:call(Peer, application, set_env, [cipherl, ssh_pubkey_alg, PKA, [{persistent, true}]]),
+    _C3 = peer:call(Peer, application, set_env, [cipherl, mod_passphrase, 'cipherl_bobsecret', [{persistent, true}]]),
     _C4 = peer:call(Peer, code, add_path, [filename:dirname(code:where_is_file("cipherl.app"))]),
+    _C5 = peer:call(Peer, code, add_path, [filename:dirname(code:where_is_file("cipherl_bobsecret.erl"))]),
+    _C6 = peer:call(Peer, application, set_env, [ssh, modify_algorithms, 
+      [{append, [{kex,['diffie-hellman-group1-sha1']}]}
+      ,{prepend, [{public_key,['ssh-rsa']}]}
+      ], [{persistent, true}]]),
+    _C7 = peer:call(Peer, application, load, [cipherl]),
+    ct:pal(?_("Config at Bob's side: ~p", [peer:call(Peer, application, get_all_env, [])])),
     BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
     ct:pal(?_("Cipherl start at Bob side: ~p", [BS])),
     % start cipherl at Alice    
-    Conf = ct:get_config(cipherl) ++ proplists:get_value(cipherl_ct, Config, []),
     start_with_handler(Conf),
+    % Affect current cookie to Bob
+    peer:call(Peer, erlang, set_cookie, [erlang:get_cookie()]),
+    net_adm:ping(Node),
     % verify Bob is recorded in known_host
     receive 
         {authorized_host, Node} 
