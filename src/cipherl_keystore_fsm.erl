@@ -411,6 +411,7 @@ handle_event(EventType, EventData, StateName, StateData) ->
 terminate(Reason, _StateName, _StateData) ->
     net_kernel:monitor_nodes(false),
     logger:notice("~p terminating: ~p", [?MODULE, Reason]),
+    gen_event:notify(cipherl_event, {cipherl_stopped, {?MODULE, Reason}}),
 	ok.
 
 %%=========================================================================

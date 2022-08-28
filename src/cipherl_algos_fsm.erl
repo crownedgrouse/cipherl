@@ -40,6 +40,7 @@ handle_event(_EventType, _EventData, StateName, StateData) ->
 
 terminate(Reason, _StateName, _StateData) ->
     logger:notice("~p terminating: ~p", [?MODULE, Reason]),
+    gen_event:notify(cipherl_event, {cipherl_stopped, {?MODULE, Reason}}),
 	ok.
 
 code_change(_OldVsn, StateName, StateData, _Extra) ->

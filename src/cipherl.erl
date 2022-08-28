@@ -22,10 +22,10 @@ start(_Type, _Args) ->
 
 prep_stop(State) ->
     logger:notice("cipherl is stopping"),
-    gen_event:notify(cipherl_event, {cipherl_stopped, ?MODULE}),
+    gen_event:notify(cipherl_event, {cipherl_stopped, {?MODULE, State}}),
     State.
 
-stop(_State) ->
+stop(_) ->
     % Flushing logs
     logger:debug("flushing logs"),
     LogHandlers = lists:flatmap(fun(M) -> [{maps:get(id, M), maps:get(module, M)}] end, logger:get_handler_config()),
@@ -35,7 +35,6 @@ stop(_State) ->
             false -> ok
         end
         end, LogHandlers),
-    logger:alert("cipherl stopped"),
     c:flush().
 
 %%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

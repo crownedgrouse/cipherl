@@ -3,7 +3,7 @@
 %%% @author    Eric Pailleau <cipherl@crownedgrouse.com>
 %%% @copyright 2022 crownedgrouse.com
 %%% @doc
-%%% Cipherl supervisor
+%%% Cipherl server
 %%% @end
 %%%
 -module(cipherl_server).
@@ -69,6 +69,7 @@ handle_info(Info, State) ->
 
 terminate(Reason, _State) ->
     logger:notice("~p terminating: ~p", [?MODULE, Reason]),
+    gen_event:notify(cipherl_event, {cipherl_stopped, {?MODULE, Reason}}),
 	ok.
 
 code_change(_OldVsn, State, _Extra) ->
