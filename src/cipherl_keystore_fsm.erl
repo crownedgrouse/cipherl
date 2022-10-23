@@ -121,8 +121,10 @@ init([]) ->
                         end
                       end, SH),
         % Check security
-        ok = check_security(Conf),
-        logger:info("Security check: OK"),
+        case check_security(Conf) of
+            ok    -> logger:info("Security check: OK");
+            error -> erlang:error("Security reason")
+        end,
         % Go on
         crypto:start(),
         % Get private key passphrase type and passphrase value
@@ -637,32 +639,55 @@ check_conf_type(K, _) ->
 %%      Events will be sent to handlers syncronously with a timeout before
 %%      raising exception, in order to let handlers doing things.
 %%-------------------------------------------------------------------------
--spec check_security(map()) -> ok | no_return().
+-spec check_security(map()) -> ok | error.
 
 check_security(Conf)   % TODO
     -> 
-    % Verify that 'mod_passphrase' still unloaded after init
-    PM = maps:get(mod_passphrase, Conf, ''),
-    case code:is_loaded(PM) of
-        false     -> ok;
-        {file, _} -> logger:alert("Passphrase is unsafe : mod_passphrase ~p is loaded", [PM]),
-                     Procs = get_proc_using_mod(PM),
-                     remove_module(PM),
-                     gen_event:notify(cipherl_event, {passphrase_unsafe, Procs}),
-                     logger:notice("Processes using mod_passphrase: ~p", [Procs])
-    end,
-    % Verify conf did not changed at runtime
-    CurConf = load_config(),
-    case ( Conf =:= CurConf) of
-        true  -> ok ;
-        false -> Diff = maps:to_list(CurConf) -- maps:to_list(Conf), 
-                 logger:warning("cipherl configuration changed since init: ~p", [Diff]),
-                 gen_event:notify(cipherl_event, {config_change, Diff})
-    end,
-    % Verify mandatory handlers are still attached to gen_event
-    % Verify all nodes are known
-    % Verify all node are allowed
-    ok.
+    try 
+        % Verify mandatory handlers are still attached to gen_event
+        % NB : this check MUST be done first and is fatal as missing handler(s) may not be able to handle other checks
+        LH = lists:flatmap(fun(X) -> case X of {M, _} -> [M] ; M -> [M] end end, gen_event:which_handlers(cipherl_event)),
+        MH = maps:get(security_handler, Conf, []),
+        {In, _Out} = lists:partition(fun(Y) ->  lists:member(Y, MH) end, LH),
+        case lists:all(fun(Z) -> lists:member(Z, MH) end, In) of
+            true  -> ok;
+            false -> Missing = MH -- In,
+                     logger:alert("Mandatory security handler missing: ~p", [Missing]),
+                     gen_event:notify(cipherl_event, {handler_missing, Missing}),
+                     erlang:throw(handler_missing)
+        end,
+        % Verify that 'mod_passphrase' still unloaded after init, and not sticky
+        PM = maps:get(mod_passphrase, Conf, ''),
+        try
+            case code:is_sticky(PM) of
+                false -> ok;
+                true  -> erlang:throw(error)
+            end,
+            case code:is_loaded(PM) of
+                false     -> ok;
+                {file, _} -> erlang:throw(error)
+            end
+        catch _:_ -> 
+                logger:alert("Passphrase is unsafe : mod_passphrase ~p is loaded", [PM]),
+                Procs = get_proc_using_mod(PM),
+                remove_module(PM),
+                gen_event:notify(cipherl_event, {passphrase_unsafe, Procs}),
+                logger:notice("Processes using mod_passphrase: ~p", [Procs])
+        end,
+        % Verify conf did not changed at runtime
+        CurConf = load_config(),
+        case ( Conf =:= CurConf) of
+            true  -> ok ;
+            false -> Diff = maps:to_list(CurConf) -- maps:to_list(Conf), 
+                     logger:warning("cipherl configuration changed since init: ~p", [Diff]),
+                     gen_event:notify(cipherl_event, {config_change, Diff})
+        end,
+        % Verify all nodes are known  TODO
+        % Verify all node are allowed  TODO
+        ok
+    catch
+        _:_ -> error
+    end.
 
 %%-------------------------------------------------------------------------
 %% @doc Allowed SSH pubkey algorithms
