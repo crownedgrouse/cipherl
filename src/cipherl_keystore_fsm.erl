@@ -22,7 +22,7 @@
 -export([terminate/3]).
 -export([code_change/4]).
 
--export([check_auth/2]).
+-export([check_auth/2, check_security/1, check_security/2]).
 
 
 -export([format_status/2]).
@@ -121,7 +121,7 @@ init([]) ->
                         end
                       end, SH),
         % Check security
-        case check_security(Conf) of
+        case check_security(Conf, true) of
             ok    -> logger:info("Security check: OK");
             error -> erlang:error("Security reason")
         end,
@@ -638,12 +638,54 @@ check_conf_type(K, _) ->
 %% @doc Check security regarding config
 %%      Events will be sent to handlers syncronously with a timeout before
 %%      raising exception, in order to let handlers doing things.
+%%      Mode=true More verbose, mainly for first check at init
+%%      Mode=false Less verbose (default)
 %%-------------------------------------------------------------------------
 -spec check_security(map()) -> ok | error.
 
-check_security(Conf)   % TODO
+check_security(Conf) -> check_security(Conf, false).
+
+-spec check_security(map(), boolean()) -> ok | error.
+
+check_security(Conf, Mode)   % TODO
     -> 
     try 
+        % Verify restricted shell security
+        CRS = case application:get_env(cipherl,check_rs) of
+                {ok, RS} when is_boolean(RS) -> RS ;
+                _ -> true
+              end,
+        case application:get_env(stdlib, restricted_shell) of
+            {ok, RSM} when (CRS =:= true)  ->  
+                % Check RSM is a valid module
+                case  code:ensure_loaded(RSM) of 
+                    {module, _}         -> ok;
+                    {error, embedded}   -> ok;
+                    {error, _}          -> 
+                        logger:warning("Invalid restricted_shell module.", []),
+                        erlang:throw(error)
+                end;
+            {ok, _RSM} when (CRS =:= false) -> 
+                % Notice that a RS exists but check_rs is false
+                case Mode of
+                    true ->
+                        logger:notice("A restricted_shell is found but check_rs set to false. Continuing anyway.",[]);
+                    _ -> skip 
+                end;
+            _ when (CRS =:= false) -> 
+                case Mode of
+                    true -> 
+                        logger:warning("No restricted_shell found and check_rs set to false !",[]),
+                        logger:notice("Disable use of a restricted shell is a serious security breach. You are aware, do not blame cipherl !",[]),
+                        logger:info("No warning will be raised on this at later security checks.")
+                        ;
+                    _ -> skip
+                end;
+            _ when (CRS =:= true) -> 
+                logger:warning("No restricted_shell found and check_rs set to true !",[]),
+                logger:notice("See https://github.com/crownedgrouse/cipherl/wiki/1---Configuration#check_rs"),
+                erlang:throw(error)
+        end,
         % Verify mandatory handlers are still attached to gen_event
         % NB : this check MUST be done first and is fatal as missing handler(s) may not be able to handle other checks
         LH = lists:flatmap(fun(X) -> case X of {M, _} -> [M] ; M -> [M] end end, gen_event:which_handlers(cipherl_event)),
