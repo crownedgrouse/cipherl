@@ -115,7 +115,7 @@
     {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
     BPubKey = ssh_file:extract_public_key(BPrivKey),
     ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
-    Config ++ [{cipherl_ct, [{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
+    Config ++ [{cipherl_ct, [{ssh_dir,user},{check_rs, false},{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
  init_per_group(_GroupName, Config) ->
     %ct:print(io_lib:format("Group config ~p : ~p", [_GroupName, Config])),
      Config.
@@ -207,17 +207,17 @@
  %% Info = [tuple()]
  %%--------------------------------------------------------------------
 add_host_key_true_ok() 
-     ->  test_case_common([{default_config, cipherl, [{add_host_key, true}]}]).
+     ->  test_case_common([]).
 add_host_key_true_ko() 
-     ->  test_case_common([{default_config, cipherl, [{add_host_key, true}]}]).
+     ->  test_case_common([]).
 add_host_key_false_ok() 
-     ->  test_case_common([{default_config, cipherl, [{add_host_key, false}]}]).
+     ->  test_case_common([]).
 add_host_key_false_ko() 
-     ->  test_case_common([{default_config, cipherl, [{add_host_key, false}]}]).
+     ->  test_case_common([]).
 hidden_node_true() 
-     ->  test_case_common([{default_config, cipherl, [{hidden_node, true}]}]).
+     ->  test_case_common([]).
 hidden_node_false() 
-     ->  test_case_common([{default_config, cipherl, [{hidden_node, false}]}]).
+     ->  test_case_common([]).
 mod_passphrase_none_ok() 
      ->  test_case_common([]).
 mod_passphrase_none_ko() 
@@ -279,10 +279,11 @@ test_case_common(X) ->
  %% Comment = term()
  %%--------------------------------------------------------------------
 add_host_key_true_ok(Config) ->  
+    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
     ct:comment("Alice add Bob's public key in known_hosts and allow Bob to connect"),
-    ct:pal(?_("~p", [ct:get_config(cipherl)])),
-    Conf = ct:get_config(cipherl) ++ proplists:get_value(cipherl_ct, Config, []),
-    ct:pal(?_("Config: ~p", [Conf])),
+    Conf = [{add_host_key, true}] ++ 
+           proplists:get_value(cipherl_ct, Config, []) ,
+    ct:log(?_("Config at Alice's side: ~p", [Conf])),
     % remove current known_hosts created by init_per_group
     AD = proplists:get_value(user_dir, Conf),
     KH = filename:join(AD, "known_hosts"),
@@ -295,7 +296,7 @@ add_host_key_true_ok(Config) ->
     {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash, connection => standard_io}),
     % launch cipherl at Bob side with a config set before
     PKA = proplists:get_value(ssh_pubkey_alg, Conf),
-    ct:pal(?_("pubkey: ~p", [PKA])),
+    ct:log(?_("pubkey: ~p", [PKA])),
     BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
     _C0 = peer:call(Peer, application, set_env, [cipherl, ssh_dir, user, [{persistent, true}]]),
     _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD, [{persistent, true}]]),
@@ -307,31 +308,39 @@ add_host_key_true_ok(Config) ->
       [{append, [{kex,['diffie-hellman-group1-sha1']}]}
       ,{prepend, [{public_key,['ssh-rsa']}]}
       ], [{persistent, true}]]),
-    _C7 = peer:call(Peer, application, load, [cipherl]),
-    ct:pal(?_("Config at Bob's side: ~p", [peer:call(Peer, application, get_all_env, [])])),
+    _C7 = peer:call(Peer, application, set_env, [cipherl, check_rs, false, [{persistent, true}]]),
+    _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, true, [{persistent, true}]]),
+    _CLast = peer:call(Peer, application, load, [cipherl]),
+    ct:log(?_("Config at Bob's side: ~p", [lists:sort(peer:call(Peer, application, get_all_env, [cipherl]))])),
     BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
-    ct:pal(?_("Cipherl start at Bob side: ~p", [BS])),
+    ct:log(?_("Cipherl start at Bob side: ~p", [BS])),
     % start cipherl at Alice    
     start_with_handler(Conf),
     % Affect current cookie to Bob
     peer:call(Peer, erlang, set_cookie, [erlang:get_cookie()]),
-    net_adm:ping(Node),
+    peer:call(Peer, net_adm, ping, [node()]),
+    %net_adm:ping(Node),
     % verify Bob is recorded in known_host
     receive 
         {authorized_host, Node} 
-            -> ct:pal(?_("~p was authorized in known_hosts", [Node]));
+            -> ct:pal(?_("~p was authorized in known_hosts", [Node])),
+               % verify Bob is allowed to connect
+               ok;
         Other 
-            -> ct:pal(?_("Received : ~p", [Other]))
-    end,
-    % verify Bob is allowed to connect
-    ok.
+            -> ct:pal(?_("Received : ~p", [Other])),
+               peer:stop(Peer),
+               ct:fail({unexpected_msg, Other})
+    end.
 add_host_key_true_ko(_Config) ->  
+    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
     ct:comment("Alice do not add Bob in known_hosts due to invalid public key"),
     ok.
 add_host_key_false_ok(Config) -> 
+    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
     ct:comment("Alice has Bob's public key already recorded and allow Bob to try authentication"),
     % Set config for Alice
-    Conf = ct:get_config(cipherl) ++ proplists:get_value(cipherl_ct, Config, []),
+    Conf = [{add_host_key, false}] ++ 
+           proplists:get_value(cipherl_ct, Config, []) ,
     %ct:log(?_("Cipherl config : ~p", [Conf])),
     start_with_handler(Conf),
     % Starting Bob 
@@ -340,14 +349,15 @@ add_host_key_false_ok(Config) ->
 
     receive 
         {authorized_host, Node} 
-            -> ct:pal(?_("~p was authorized in known_hosts", [Node])),
-               peer:stop(Peer);
+            -> ct:pal(?_("~p was authorized in known_hosts", [Node]));
         Other 
             -> ct:fail({unexpected_msg, Other})
     after 5000 -> ct:fail(timeout)
     end,
+    peer:stop(Peer),
     ok.
 add_host_key_false_ko(_Config) ->  
+    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
     ct:comment("Alice has Bob's public key already recorded and refuse connection to Bob due to invalid challenge"),
     ok.
 hidden_node_true(_Config) ->  ok.
@@ -451,6 +461,7 @@ link_path(KeyPath)
 %%-------------------------------------------------------------------------
 start_with_handler(Conf)
     ->
+    ct:pal("ICI ~p ", [Conf]),
     ok = application:set_env([{cipherl, Conf}]),
     {ok, _} = application:ensure_all_started(cipherl),
     % Add handler

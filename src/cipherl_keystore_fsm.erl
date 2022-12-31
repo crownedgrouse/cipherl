@@ -296,7 +296,7 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
         % Add node as Pending with nonce expected
         Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
         NewStateData = maps:merge(StateData, #{pending => Map1}),
-        logger:debug("Updating pending nodes : ~p",[Map1]),
+        logger:warning("~p Updating pending nodes : ~p",[node(), Map1]),
         {next_state, monitor_nodes, NewStateData}
     catch
         _:unauthorized_host ->
@@ -333,6 +333,7 @@ monitor_nodes(info, Msg, StateData)
                 X -> X
             end,
     Conf = maps:get(conf, StateData),
+    logger:warning("!!!!!!!!!!!!! ~p !!!!!!!!!!!!!!!!!!!!",[Msg]),
     try 
         % Check Node is a pending one
         case maps:is_key(Node, maps:get(pending, StateData)) of
@@ -348,7 +349,7 @@ monitor_nodes(info, Msg, StateData)
         % Add host is required
         case maps:get(add_host_key, Conf, false) of
             false  -> ok ;
-            true -> 
+            true -> logger:warning("!!!!!!!!!!!!! ICI !!!!!!!!!!!!!!!!!!!!",[]),
                 % Get hostname from Node
                 Host = get_host_from_node(Node),
                 %

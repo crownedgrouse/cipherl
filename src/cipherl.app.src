@@ -7,6 +7,7 @@
             ,cipherl_passphrase
             ,cipherl_server
             ,cipherl_sup
+	    ,cipherl_rs
             ]},
   {registered, [cipherl, cipherl_ks, cipherl_alg, cipherl_srv]},
   {applications, [kernel, stdlib, sasl, crypto, ssh]},
