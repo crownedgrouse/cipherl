@@ -90,7 +90,7 @@ format_status(Opt, [_PDict,_State,_Data]) ->
 %% @doc Init function
 %% @end
 %%-------------------------------------------------------------------------
-init([]) ->
+init(_) ->
     ?INITD,
     ?INITT,
     erlang:register(cipherl_ks, self()),
@@ -349,7 +349,7 @@ monitor_nodes(info, Msg, StateData)
         % Add host is required
         case maps:get(add_host_key, Conf, false) of
             false  -> ok ;
-            true -> logger:warning("!!!!!!!!!!!!! ICI !!!!!!!!!!!!!!!!!!!!",[]),
+            true -> 
                 % Get hostname from Node
                 Host = get_host_from_node(Node),
                 %

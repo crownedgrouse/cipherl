@@ -309,12 +309,13 @@ add_host_key_true_ok(Config) ->
       ,{prepend, [{public_key,['ssh-rsa']}]}
       ], [{persistent, true}]]),
     _C7 = peer:call(Peer, application, set_env, [cipherl, check_rs, false, [{persistent, true}]]),
-    _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, true, [{persistent, true}]]),
+    _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, false, [{persistent, true}]]),
     _CLast = peer:call(Peer, application, load, [cipherl]),
     ct:log(?_("Config at Bob's side: ~p", [lists:sort(peer:call(Peer, application, get_all_env, [cipherl]))])),
     BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
     ct:log(?_("Cipherl start at Bob side: ~p", [BS])),
-    % start cipherl at Alice    
+    % start cipherl at Alice  
+    ok = application:unset_env(cipherl, add_host_key),
     start_with_handler(Conf),
     % Affect current cookie to Bob
     peer:call(Peer, erlang, set_cookie, [erlang:get_cookie()]),
@@ -461,7 +462,8 @@ link_path(KeyPath)
 %%-------------------------------------------------------------------------
 start_with_handler(Conf)
     ->
-    ct:pal("ICI ~p ", [Conf]),
+    application:stop(cipherl),
+    application:unload(cipherl), % Keep otherwise conf is not applied
     ok = application:set_env([{cipherl, Conf}]),
     {ok, _} = application:ensure_all_started(cipherl),
     % Add handler
