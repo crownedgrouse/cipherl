@@ -115,7 +115,7 @@
     {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
     BPubKey = ssh_file:extract_public_key(BPrivKey),
     ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
-    Config ++ [{cipherl_ct, [{ssh_dir,user},{check_rs, false},{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
+    Config ++ [{cipherl_ct, [{mod_passphrase,cipherl_alicesecret}, {ssh_dir,user},{check_rs, false},{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
  init_per_group(_GroupName, Config) ->
     %ct:print(io_lib:format("Group config ~p : ~p", [_GroupName, Config])),
      Config.
@@ -309,18 +309,18 @@ add_host_key_true_ok(Config) ->
       ,{prepend, [{public_key,['ssh-rsa']}]}
       ], [{persistent, true}]]),
     _C7 = peer:call(Peer, application, set_env, [cipherl, check_rs, false, [{persistent, true}]]),
-    _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, false, [{persistent, true}]]),
+    _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, true, [{persistent, true}]]),
     _CLast = peer:call(Peer, application, load, [cipherl]),
     ct:log(?_("Config at Bob's side: ~p", [lists:sort(peer:call(Peer, application, get_all_env, [cipherl]))])),
     BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
     ct:log(?_("Cipherl start at Bob side: ~p", [BS])),
     % start cipherl at Alice  
-    ok = application:unset_env(cipherl, add_host_key),
     start_with_handler(Conf),
     % Affect current cookie to Bob
     peer:call(Peer, erlang, set_cookie, [erlang:get_cookie()]),
+    erlang:set_cookie(Node, erlang:get_cookie()),
     peer:call(Peer, net_adm, ping, [node()]),
-    %net_adm:ping(Node),
+    net_adm:ping(Node),
     % verify Bob is recorded in known_host
     receive 
         {authorized_host, Node} 
@@ -463,6 +463,9 @@ link_path(KeyPath)
 start_with_handler(Conf)
     ->
     application:stop(cipherl),
+    receive _ -> ok 
+        after 2000 -> ok
+    end,
     application:unload(cipherl), % Keep otherwise conf is not applied
     ok = application:set_env([{cipherl, Conf}]),
     {ok, _} = application:ensure_all_started(cipherl),

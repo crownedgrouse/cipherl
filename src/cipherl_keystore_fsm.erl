@@ -154,6 +154,11 @@ init(_) ->
             end,
         Public = ?PUBKEY(Private),
 
+        case global:register_name({cipherl_ks, node()}, self()) of
+            yes -> ok;
+            no  ->  logger:notice("registered name at node ~p already set", [node()]),
+                    global:re_register_name({cipherl_ks, node()}, self())
+        end,
         logger:notice("~p Init: OK", [?MODULE]),
 	    {ok, monitor_nodes, #{nodes   => #{}
                              ,pending => #{}
@@ -173,9 +178,10 @@ init(_) ->
 %% @doc Handle calls
 %% @end
 %%-------------------------------------------------------------------------
-monitor_nodes({call, {From, Tag}}, {verify, Msg}, StateData) 
+monitor_nodes({call, {From, Tag}}, {verify, Msg}=PL, StateData) 
     when is_record(Msg, cipherl_msg)  ->
     {cipherl_msg, Node, P, S} = Msg,
+    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, StateData]),
     % Decrypt Payload
     Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
     PubKey = get_pubkey_from_node(Node, StateData),
@@ -185,13 +191,15 @@ monitor_nodes({call, {From, Tag}}, {verify, Msg}, StateData)
                 gen_statem:reply({From, Tag}, error)
     end,
     {next_state, monitor_nodes, StateData};
-monitor_nodes({call, {From, Tag}}, {uncrypt, Msg}, StateData) 
+monitor_nodes({call, {From, Tag}}, {uncrypt, Msg}=PL, StateData) 
     when is_record(Msg, cipherl_msg)  ->
     {cipherl_msg, _, P, _} = Msg,
+    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, StateData]),
     Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
     gen_statem:reply({From, Tag}, Bin),
     {next_state, monitor_nodes, StateData};
-monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg, Pid}, StateData) ->
+monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg, Pid} = PL, StateData) ->
+    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, StateData]),
     try     
         % Check initial call
         check_initial_call(Node, process_info(Pid, initial_call), erlang:get(rpc_enabled), maps:get(pending, StateData)),
@@ -239,6 +247,7 @@ monitor_nodes(cast, EventData, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {nodedown, Node, _}, StateData) ->
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodedown, StateData]),
     % Remove node info in state
     Map1 = maps:remove(Node, maps:get(nodes, StateData)),
     Map2 = maps:remove(Node, maps:get(pending, StateData)),
@@ -253,6 +262,7 @@ monitor_nodes(info, {nodedown, Node, _}, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {nodeup, Node, _}, StateData) ->
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodeup, StateData]),
     try
         Conf = maps:get(conf, StateData),
         %% Fatal checks
@@ -281,23 +291,21 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
         end,
 
         %% OK we can go further
-        Nonce = erlang:monotonic_time(),
-        % Send authenfication challenge to Node
-        {cipherl_ks, Node} ! hello_msg(StateData),
-        % Start a timer for hello timeout 
-        Time = case net_kernel:get_net_ticktime() of
-                    ignore -> 5000 ;
-                    {ongoing_change_to, NT} -> NT * 1000 ;
-                    NT -> NT * 1000
-               end,
-        {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
-        erlang:put(Node, TRef),
-        logger:debug("Start ~p ms timer - hello_timeout: ~p", [Time, TRef]),
-        % Add node as Pending with nonce expected
-        Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
-        NewStateData = maps:merge(StateData, #{pending => Map1}),
-        logger:warning("~p Updating pending nodes : ~p",[node(), Map1]),
-        {next_state, monitor_nodes, NewStateData}
+        case global:whereis_name({cipherl_ks, Node}) of
+            undefined 
+                ->  
+                logger:notice("cipherl is not (already ?) started at ~p", [Node]),
+                net_adm:ping(Node),
+                % Start a timer for node timeout 
+                Time = get_timer(),
+                {ok, TRef} =  timer:send_after(Time, {node_timeout, Node}),
+                erlang:put(Node, TRef),
+                logger:debug("Start ~p ms timer - node_timeout: ~p", [Time, TRef]);
+            _   -> % cipherl exists at remote side
+                self() ! {node_timeout, Node},
+                ok 
+        end,
+        {next_state, monitor_nodes, StateData}
     catch
         _:unauthorized_host ->
                     rogue(Node),
@@ -313,13 +321,45 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                     {next_state, monitor_nodes, StateData}
     end;
 %%-------------------------------------------------------------------------
-%% @doc Receive timeout while challenge is running
+%% @doc Receive timeout while node is connected
+%% @end
+%%-------------------------------------------------------------------------
+monitor_nodes(info, {node_timeout, Node}, StateData) ->
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, node_timeout, StateData]),
+    erlang:display({node_timeout, Node}),
+    case global:whereis_name({cipherl_ks, Node}) of
+        undefined -> 
+            logger:info("cipherl still not found in global registry for ~p", [Node]),
+            rogue(Node),
+            {next_state, monitor_nodes, StateData};
+        Pid when is_pid(Pid) -> 
+            Nonce = erlang:monotonic_time(),
+            % Send authenfication challenge to Node
+            logger:notice("Sending hello_msg to node ~p", [Node]),
+            Ret = erlang:send(Pid, hello_msg(StateData)),
+            erlang:display(Ret),
+            % Start a timer for hello timeout 
+            Time = get_timer(),
+            {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
+            erlang:put(Node, TRef),
+            logger:debug("Start ~p ms timer - hello_timeout: ~p", [Time, TRef]),
+            % Add node as Pending with nonce expected
+            Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
+            NewStateData = maps:merge(StateData, #{pending => Map1}),
+            logger:warning("~p Updating pending nodes : ~p",[node(), Map1]),
+            {next_state, monitor_nodes, NewStateData}
+    end;
+%%-------------------------------------------------------------------------
+%% @doc Receive hello timeout while challenge is running
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {hello_timeout, Node}, StateData) ->
-    logger:warning("Hello timeout from node ~p", [Node]),
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, hello_timeout, StateData]),
+    erlang:display({hello_timeout, Node}),
+    logger:warning("Hello timeout for node ~p", [Node]),
     Map1 = maps:remove(Node, maps:get(pending, StateData)),
     NewStateData = maps:merge(StateData, #{pending => Map1}),
+    logger:notice("Removing node ~p from pending", [Node]),
     {next_state, monitor_nodes, NewStateData};
 %%-------------------------------------------------------------------------
 %% @doc Treat auth message
@@ -376,14 +416,14 @@ monitor_nodes(info, Msg, StateData)
         {next_state, monitor_nodes, NewStateData}
     catch
         _:add_host_key_failure -> 
-             logger:error("Failure while adding host key for node: ~p", [Node]);
+             logger:error("~p~p Failure while adding host key for node: ~p", [?MODULE, self(),Node]);
         _:unexpected_auth_msg  -> 
-             logger:notice("Received auth message for not pending node: ~p", [Node]),
+             logger:notice("~p~p Received auth message for not pending node: ~p", [?MODULE, self(),Node]),
              {next_state, monitor_nodes, StateData};
         _:invalid_auth_msg -> 
-             logger:error("Invalid auth message received from node: ~p", [Node]),
+             logger:error("~p~p Invalid auth message received from node: ~p", [?MODULE, self(),Node]),
              logger:info("Msg: ~p", [Msg]),
-             logger:notice("Disconnecting rogue node: ~p", [rogue(Node)]),
+             logger:notice("~p~p Disconnecting rogue node: ~p", [?MODULE, self(), rogue(Node)]),
              {next_state, monitor_nodes, StateData}
     end;
 monitor_nodes(info, EventData, StateData) ->
@@ -991,3 +1031,13 @@ check_initial_call(Node, IC, RPC, Pendings)
     end;
 check_initial_call(_, _, _, _) ->
     throw(rpc_disabled).
+
+%%-------------------------------------------------------------------------
+%% @doc Get a Timer based on ticktime
+%%-------------------------------------------------------------------------
+get_timer() ->
+    case net_kernel:get_net_ticktime() of
+        ignore -> 5000 ;
+        {ongoing_change_to, NT} -> NT * 1000 ;
+        NT -> NT * 1000
+    end.

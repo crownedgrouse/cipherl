@@ -21,7 +21,7 @@ start(_Type, _Args) ->
 	cipherl_sup:start_link().
 
 prep_stop(State) ->
-    logger:notice("cipherl is stopping"),
+    logger:notice("~p~p cipherl is stopping at ~p", [?MODULE, self(), node()]),
     gen_event:notify(cipherl_event, {cipherl_stopped, {?MODULE, State}}),
     State.
 
