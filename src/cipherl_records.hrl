@@ -30,20 +30,25 @@
 %% @end
 %%-------------------------------------------------------------------------
 -record(cipherl_auth,
-            {cipherl_hello = #cipherl_hello{}
-            ,cipherl_msg   = #cipherl_msg{}
+            {node     :: atom()
+            ,nonce    :: integer()
+            ,chal     :: binary()  % cîpherl_chal record crypted with my Private key
             }
        ).
 
 %%-------------------------------------------------------------------------
-%% @doc Challenge to be sent back 
-%%      Term to be sent back as crypted payload into a cipherl_auth message.
-%%      Recipient check that node is itself and nonce was the one used.
+%% @doc Challenge record
+%%      Record to be sent crypted with my private key as part 
+%%      of cipherl_auth message  (chal entry).
+%%      Second nonce MUST be the same than nonce set in cipherl_auth 
+%%      message (nonce entry).
+%%      Challenging Node will need to check that its own chal record 
+%%      crypted with public key
 %% @end
 %%-------------------------------------------------------------------------
 -record(cipherl_chal,
             { node    :: atom()      % Node having sent Hello
-            , nonce   :: integer()   % Nonce received from upper node in Hello message (used as a non replay protection)
-            , random  :: term()      % Anything random to let payload unpredictable. Empty is an error.
+            , nonce   :: integer()   % Nonce received in Hello message 
+            , nonce   :: integer()   % Repeat Nonce of cipherl_auth (used as a non replay protection)
             }
        ).

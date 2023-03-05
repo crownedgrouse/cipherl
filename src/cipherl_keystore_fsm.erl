@@ -181,7 +181,7 @@ init(_) ->
 monitor_nodes({call, {From, Tag}}, {verify, Msg}=PL, StateData) 
     when is_record(Msg, cipherl_msg)  ->
     {cipherl_msg, Node, P, S} = Msg,
-    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, StateData]),
+    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, hide_sensitive(StateData)]),
     % Decrypt Payload
     Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
     PubKey = get_pubkey_from_node(Node, StateData),
@@ -194,12 +194,12 @@ monitor_nodes({call, {From, Tag}}, {verify, Msg}=PL, StateData)
 monitor_nodes({call, {From, Tag}}, {uncrypt, Msg}=PL, StateData) 
     when is_record(Msg, cipherl_msg)  ->
     {cipherl_msg, _, P, _} = Msg,
-    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, StateData]),
+    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, hide_sensitive(StateData)]),
     Bin = public_key:decrypt_private(P, maps:get(private, StateData)), % TODO catch
     gen_statem:reply({From, Tag}, Bin),
     {next_state, monitor_nodes, StateData};
 monitor_nodes({call, {From, Tag}}, {crypt, Node, Msg, Pid} = PL, StateData) ->
-    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, StateData]),
+    logger:info("~p~p cast received from ~p: ~p while in state ~p", [?MODULE, self(), {From, Tag}, PL, hide_sensitive(StateData)]),
     try     
         % Check initial call
         check_initial_call(Node, process_info(Pid, initial_call), erlang:get(rpc_enabled), maps:get(pending, StateData)),
@@ -247,7 +247,7 @@ monitor_nodes(cast, EventData, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {nodedown, Node, _}, StateData) ->
-    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodedown, StateData]),
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodedown, hide_sensitive(StateData)]),
     % Remove node info in state
     Map1 = maps:remove(Node, maps:get(nodes, StateData)),
     Map2 = maps:remove(Node, maps:get(pending, StateData)),
@@ -262,7 +262,7 @@ monitor_nodes(info, {nodedown, Node, _}, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {nodeup, Node, _}, StateData) ->
-    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodeup, StateData]),
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodeup, hide_sensitive(StateData)]),
     try
         Conf = maps:get(conf, StateData),
         %% Fatal checks
@@ -321,11 +321,11 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                     {next_state, monitor_nodes, StateData}
     end;
 %%-------------------------------------------------------------------------
-%% @doc Receive timeout while node is connected
+%% @doc Receive node timeout while connected but remote cîpherl wasn't found
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {node_timeout, Node}, StateData) ->
-    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, node_timeout, StateData]),
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, node_timeout, hide_sensitive(StateData)]),
     erlang:display({node_timeout, Node}),
     case global:whereis_name({cipherl_ks, Node}) of
         undefined -> 
@@ -336,8 +336,7 @@ monitor_nodes(info, {node_timeout, Node}, StateData) ->
             Nonce = erlang:monotonic_time(),
             % Send authenfication challenge to Node
             logger:notice("Sending hello_msg to node ~p", [Node]),
-            Ret = erlang:send(Pid, hello_msg(StateData)),
-            erlang:display(Ret),
+            erlang:send(Pid, hello_msg(StateData)),
             % Start a timer for hello timeout 
             Time = get_timer(),
             {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
@@ -354,8 +353,7 @@ monitor_nodes(info, {node_timeout, Node}, StateData) ->
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {hello_timeout, Node}, StateData) ->
-    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, hello_timeout, StateData]),
-    erlang:display({hello_timeout, Node}),
+    logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, hello_timeout, hide_sensitive(StateData)]),
     logger:warning("Hello timeout for node ~p", [Node]),
     Map1 = maps:remove(Node, maps:get(pending, StateData)),
     NewStateData = maps:merge(StateData, #{pending => Map1}),
@@ -368,13 +366,15 @@ monitor_nodes(info, {hello_timeout, Node}, StateData) ->
 monitor_nodes(info, Msg, StateData) 
     when is_record(Msg, cipherl_auth) 
     ->
-    Node = case (catch erlang:element(2, erlang:element(2, Msg))) of
+    {cipherl_auth, Node, Nonce, _} = Msg,
+    ExpNode = case (catch erlang:element(2, erlang:element(2, Msg))) of
                 {'EXIT', _} -> 'unknown';
                 X -> X
             end,
     Conf = maps:get(conf, StateData),
-    logger:warning("!!!!!!!!!!!!! ~p !!!!!!!!!!!!!!!!!!!!",[Msg]),
     try 
+        % Check ExpNode is me
+        erlang:display({expnode, ExpNode, node()}),
         % Check Node is a pending one
         case maps:is_key(Node, maps:get(pending, StateData)) of
             false -> throw(unexpected_auth_msg) ;
@@ -394,7 +394,7 @@ monitor_nodes(info, Msg, StateData)
                 Host = get_host_from_node(Node),
                 %
                 Port = 4369, % Empd port TODO
-                Key  = get_pubkey_from_auth(Msg),
+                Key  = erlang:get(Node),
                 % set user_dir
                 UD = case maps:get(user_dir) of
                          [] -> [];
@@ -409,10 +409,10 @@ monitor_nodes(info, Msg, StateData)
                 end
         end,
         % Add node to authentified nodes and remove from pending
-        Nonce = get_nonce_from_auth(Msg),
         Map1 = maps:put(Node, Nonce, maps:get(nodes, StateData)),
         Map2 = maps:remove(Node, maps:get(pending, StateData)),
         NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
+        logger:notice("node ~p was authentified", [Node]),
         {next_state, monitor_nodes, NewStateData}
     catch
         _:add_host_key_failure -> 
@@ -426,6 +426,41 @@ monitor_nodes(info, Msg, StateData)
              logger:notice("~p~p Disconnecting rogue node: ~p", [?MODULE, self(), rogue(Node)]),
              {next_state, monitor_nodes, StateData}
     end;
+%%-------------------------------------------------------------------------
+%% @doc Treat Hello message
+%% @end
+%%-------------------------------------------------------------------------
+monitor_nodes(info, Msg, StateData) 
+    when is_record(Msg, cipherl_hello) ->
+    erlang:display(Msg),
+    Node   = Msg#cipherl_hello.node,
+    Nonce  = Msg#cipherl_hello.nonce,
+    PubKey = Msg#cipherl_hello.pubkey,
+    _Algos  = Msg#cipherl_hello.algos,
+    % Check Algos are compatible
+    % Send back Auth message
+    case global:whereis_name({cipherl_ks, Node}) of
+        undefined -> 
+            logger:info("cipherl is not found in global registry for ~p: aborting auth message sending", [Node]),
+            {next_state, monitor_nodes, StateData};
+        Pid when is_pid(Pid) ->
+            erlang:put(Node, PubKey), % Temporary store pubkey of node, until recorded in authorized key after auth.
+            % Create challenge response
+            Bin = erlang:term_to_binary({cipherl_chal, Node, Nonce, rand:bytes(10)}),
+            % Crypt payload with recipient public key
+            P=public_key:encrypt_public(Bin, PubKey),
+            % Sign payload with local private key
+            S=public_key:sign(Bin, ?DIGEST, maps:get(private, StateData)),
+            % Compose cipherl_msg
+            CM = #cipherl_msg{node=Node, payload=P, signed=S},
+            erlang:send(Pid, {cipherl_auth, 
+                              node(), 
+                              erlang:monotonic_time(),
+                              CM
+                              }),
+            logger:info("sending auth message to ~p", [Node]),
+            {next_state, monitor_nodes, StateData}
+    end;   
 monitor_nodes(info, EventData, StateData) ->
     logger:info("~p~p info received: ~p", [?MODULE, self(), EventData]),
     {next_state, monitor_nodes, StateData};
@@ -495,7 +530,7 @@ check_auth(AuthMsg, State)
     when  is_record(AuthMsg, cipherl_auth)
     ->
     try 
-        {_, {cipherl_hello, Node, _, PubKey, Algos}, {cipherl_msg, Payload, Signed}} = AuthMsg,
+        {_, Node, {cipherl_msg, Payload, Signed}} = AuthMsg,
         % Check node is a pending one, and get expected nonce
         Nonce =
         case maps:find(pending, State) of
@@ -508,10 +543,10 @@ check_auth(AuthMsg, State)
                 end
         end,
         % Check algos are compatible
-        case cipherl_algos_fsm:compatible(Algos) of
-            false -> throw(incompatible_algos);
-            true  -> ok
-        end,
+        %case cipherl_algos_fsm:compatible(Algos) of
+        %    false -> throw(incompatible_algos);
+        %    true  -> ok
+        %end,
         % Decrypt payload with my private key
         Bin  = public_key:decrypt_private(Payload, maps:get(private, State)),
         Data =
@@ -536,6 +571,7 @@ check_auth(AuthMsg, State)
             true   -> throw(invalid_empty_random);
             false  -> ok
         end,
+        PubKey = erlang:get(Node),
         % Verify signature
         true = public_key:verify(Bin, ?DIGEST, Signed, PubKey) 
     catch
@@ -574,33 +610,6 @@ get_pubkey_from_node(Node, StateData)
             -> maps:get(public, StateData) ;
         _   -> maps:get(public, StateData) % TODO
     end.
-%%-------------------------------------------------------------------------
-%% @doc Get public Key from auth message
-%% @end
-%%-------------------------------------------------------------------------
--spec get_nonce_from_auth(tuple()) -> any().
-
-get_nonce_from_auth(Msg)
-    when  is_record(Msg, cipherl_auth)
-    ->
-    {cipherl_auth, H, _} = Msg,
-    {cipherl_hello, _, Nonce, _, _} = H,
-    Nonce.
-
-%%-------------------------------------------------------------------------
-%% @doc Get public Key from auth message
-%% @end
-%%-------------------------------------------------------------------------
--spec get_pubkey_from_auth(tuple()) -> any().
-
-get_pubkey_from_auth(Msg)
-    when  is_record(Msg, cipherl_auth)
-    ->
-    {cipherl_auth, H, _} = Msg,
-    {cipherl_hello, _, _, PubKey, _} = H,
-    PubKey.
-
-
 %%-------------------------------------------------------------------------
 %% @doc Load config and set default
 %% @end
@@ -1041,3 +1050,10 @@ get_timer() ->
         {ongoing_change_to, NT} -> NT * 1000 ;
         NT -> NT * 1000
     end.
+
+%%-------------------------------------------------------------------------
+%% @doc Hide sensitive data for logging
+%%-------------------------------------------------------------------------
+hide_sensitive(D) when is_map(D) ->
+    % Remove private entry if any
+    maps:update(private, "---8<--- Snip --->8---", D).
