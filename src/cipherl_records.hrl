@@ -32,13 +32,15 @@
 -record(cipherl_auth,
             {node     :: atom()
             ,nonce    :: integer()
-            ,chal     :: binary()  % cîpherl_chal record crypted with my Private key
+            ,pubkey   :: <<>>      % Sender pubkey
+            ,chal     :: binary()  % cîpherl_chal record crypted with my remote public key and signed with private
+            ,signed   :: <<>>
             }
        ).
 
 %%-------------------------------------------------------------------------
 %% @doc Challenge record
-%%      Record to be sent crypted with my private key as part 
+%%      Record to be sent crypted with remote public key as part 
 %%      of cipherl_auth message  (chal entry).
 %%      Second nonce MUST be the same than nonce set in cipherl_auth 
 %%      message (nonce entry).
@@ -47,8 +49,9 @@
 %% @end
 %%-------------------------------------------------------------------------
 -record(cipherl_chal,
-            { node    :: atom()      % Node having sent Hello
-            , nonce   :: integer()   % Nonce received in Hello message 
+            { hellonode    :: atom()      % Node having sent Hello
+            , hellononce   :: integer()   % Nonce received in Hello message 
             , nonce   :: integer()   % Repeat Nonce of cipherl_auth (used as a non replay protection)
+            , rand     
             }
        ).

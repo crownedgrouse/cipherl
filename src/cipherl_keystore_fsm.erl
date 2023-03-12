@@ -326,21 +326,21 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {node_timeout, Node}, StateData) ->
     logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, node_timeout, hide_sensitive(StateData)]),
-    erlang:display({node_timeout, Node}),
     case global:whereis_name({cipherl_ks, Node}) of
         undefined -> 
             logger:info("cipherl still not found in global registry for ~p", [Node]),
             rogue(Node),
             {next_state, monitor_nodes, StateData};
         Pid when is_pid(Pid) -> 
+            % Affect a Nonce to Bob
             Nonce = erlang:monotonic_time(),
-            % Send authenfication challenge to Node
+            % Send authenfication challenge to Node BoB
             logger:notice("Sending hello_msg to node ~p", [Node]),
-            erlang:send(Pid, hello_msg(StateData)),
+            erlang:send(Pid, hello_msg(StateData, Nonce)),
             % Start a timer for hello timeout 
             Time = get_timer(),
             {ok, TRef} =  timer:send_after(Time, {hello_timeout, Node}),
-            erlang:put(Node, TRef),
+            erlang:put({timer, Node}, TRef),
             logger:debug("Start ~p ms timer - hello_timeout: ~p", [Time, TRef]),
             % Add node as Pending with nonce expected
             Map1 = maps:merge(maps:get(pending, StateData),#{Node => Nonce}),
@@ -366,17 +366,14 @@ monitor_nodes(info, {hello_timeout, Node}, StateData) ->
 monitor_nodes(info, Msg, StateData) 
     when is_record(Msg, cipherl_auth) 
     ->
-    {cipherl_auth, Node, Nonce, _} = Msg,
-    ExpNode = case (catch erlang:element(2, erlang:element(2, Msg))) of
-                {'EXIT', _} -> 'unknown';
-                X -> X
-            end,
     Conf = maps:get(conf, StateData),
+    {cipherl_auth, BobNode, BobNonce, BobPubKey, _Payload, _Signed} = Msg,
     try 
-        % Check ExpNode is me
-        erlang:display({expnode, ExpNode, node()}),
+        % Remove timeout
+        catch (timer:cancel(erlang:get({timer, BobNode}))),
+
         % Check Node is a pending one
-        case maps:is_key(Node, maps:get(pending, StateData)) of
+        case maps:is_key(BobNode, maps:get(pending, StateData)) of
             false -> throw(unexpected_auth_msg) ;
             true  -> % Check it is a valid auth message
                      case check_auth(Msg, StateData) of
@@ -384,24 +381,29 @@ monitor_nodes(info, Msg, StateData)
                         false -> throw(invalid_auth_msg)
                      end
         end,
-        % Remove timeout
-        timer:cancel(erlang:get(Node)),
         % Add host is required
         case maps:get(add_host_key, Conf, false) of
             false  -> ok ;
             true -> 
                 % Get hostname from Node
-                Host = get_host_from_node(Node),
+                Host = get_host_from_node(BobNode),
                 %
                 Port = 4369, % Empd port TODO
-                Key  = erlang:get(Node),
+                PubKey  = case erlang:get({pubkey, BobNode}) of
+                            undefined -> erlang:put({pubkey, BobNode}, BobPubKey),
+                                         BobPubKey;
+                            X when (X =:= BobPubKey)-> X ;
+                            _  -> % TODO decide if a security issue
+                                  BobPubKey
+                       end,
                 % set user_dir
-                UD = case maps:get(user_dir) of
+                UD = case maps:get(user_dir, Conf) of
                          [] -> [];
                          D  -> {user_dir, D}
                      end,
                 Options = lists:flatten([UD]),
-                case ssh_file:add_host_key(Host, Port, Key, Options) of
+                % TODO check if already existing before adding
+                case ssh_file:add_host_key(Host, Port, PubKey, Options) of
                     ok -> ok;
                     {error, T} -> 
                         logger:debug({error, T}),
@@ -409,56 +411,60 @@ monitor_nodes(info, Msg, StateData)
                 end
         end,
         % Add node to authentified nodes and remove from pending
-        Map1 = maps:put(Node, Nonce, maps:get(nodes, StateData)),
-        Map2 = maps:remove(Node, maps:get(pending, StateData)),
+        Map1 = maps:put(BobNode, BobNonce, maps:get(nodes, StateData)),
+        Map2 = maps:remove(BobNode, maps:get(pending, StateData)),
         NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
-        logger:notice("node ~p was authentified", [Node]),
+        logger:notice("node ~p was authentified", [BobNode]),
         {next_state, monitor_nodes, NewStateData}
     catch
         _:add_host_key_failure -> 
-             logger:error("~p~p Failure while adding host key for node: ~p", [?MODULE, self(),Node]);
+             logger:error("~p~p Failure while adding host key for node: ~p", [?MODULE, self(), BobNode]);
         _:unexpected_auth_msg  -> 
-             logger:notice("~p~p Received auth message for not pending node: ~p", [?MODULE, self(),Node]),
+             logger:notice("~p~p Received auth message for not pending node: ~p", [?MODULE, self(), BobNode]),
              {next_state, monitor_nodes, StateData};
         _:invalid_auth_msg -> 
-             logger:error("~p~p Invalid auth message received from node: ~p", [?MODULE, self(),Node]),
+             logger:error("~p~p Invalid auth message received from node: ~p", [?MODULE, self(), BobNode]),
              logger:info("Msg: ~p", [Msg]),
-             logger:notice("~p~p Disconnecting rogue node: ~p", [?MODULE, self(), rogue(Node)]),
+             logger:notice("~p~p Disconnecting rogue node: ~p", [?MODULE, self(), rogue(BobNode)]),
              {next_state, monitor_nodes, StateData}
     end;
 %%-------------------------------------------------------------------------
-%% @doc Treat Hello message
+%% @doc Treat Hello message : send back a Auth message
 %% @end
 %%-------------------------------------------------------------------------
 monitor_nodes(info, Msg, StateData) 
     when is_record(Msg, cipherl_hello) ->
-    erlang:display(Msg),
-    Node   = Msg#cipherl_hello.node,
-    Nonce  = Msg#cipherl_hello.nonce,
-    PubKey = Msg#cipherl_hello.pubkey,
+    %erlang:display(Msg),
+    BobNode   = Msg#cipherl_hello.node,
+    BobNonce  = Msg#cipherl_hello.nonce,
+    BobPubKey = Msg#cipherl_hello.pubkey,
     _Algos  = Msg#cipherl_hello.algos,
-    % Check Algos are compatible
+    % Check Algos are compatible TODO
     % Send back Auth message
-    case global:whereis_name({cipherl_ks, Node}) of
+    case global:whereis_name({cipherl_ks, BobNode}) of
         undefined -> 
-            logger:info("cipherl is not found in global registry for ~p: aborting auth message sending", [Node]),
+            logger:info("cipherl is not found in global registry for ~p: aborting auth message sending", [BobNode]),
             {next_state, monitor_nodes, StateData};
         Pid when is_pid(Pid) ->
-            erlang:put(Node, PubKey), % Temporary store pubkey of node, until recorded in authorized key after auth.
+            erlang:put({pubkey, BobNode}, BobPubKey), % Temporary store pubkey of node, until recorded in authorized key after auth.
+            AliceNonce = erlang:monotonic_time(),
+            AlicePubKey = maps:get(public, StateData),
+            erlang:put({nonce, BobNode}, AliceNonce), % Affect a nonce to Bob node
             % Create challenge response
-            Bin = erlang:term_to_binary({cipherl_chal, Node, Nonce, rand:bytes(10)}),
+            Bin = erlang:term_to_binary({cipherl_chal, BobNode, BobNonce, AliceNonce, rand:bytes(10)}),
             % Crypt payload with recipient public key
-            P=public_key:encrypt_public(Bin, PubKey),
+            P=public_key:encrypt_public(Bin, BobPubKey),
             % Sign payload with local private key
             S=public_key:sign(Bin, ?DIGEST, maps:get(private, StateData)),
-            % Compose cipherl_msg
-            CM = #cipherl_msg{node=Node, payload=P, signed=S},
+            % Compose and send cipherl_auth
             erlang:send(Pid, {cipherl_auth, 
                               node(), 
-                              erlang:monotonic_time(),
-                              CM
+                              AliceNonce,
+                              AlicePubKey,
+                              P,
+                              S
                               }),
-            logger:info("sending auth message to ~p", [Node]),
+            logger:info("sending auth message to ~p", [BobNode]),
             {next_state, monitor_nodes, StateData}
     end;   
 monitor_nodes(info, EventData, StateData) ->
@@ -509,12 +515,12 @@ code_change(_OldVsn, StateName, StateData, _Extra) ->
 %% @doc Forge a Hello message
 %% @end
 %%-------------------------------------------------------------------------
--spec hello_msg(#{}) -> tuple().
+-spec hello_msg(#{}, integer()) -> tuple().
 
-hello_msg(State) ->
+hello_msg(State, Nonce) ->
     Hello = #cipherl_hello{
               node   = node()
-            , nonce  = erlang:monotonic_time()
+            , nonce  = Nonce
             , pubkey = maps:get(public, State)
             , algos  = ssh:default_algorithms()
             },
@@ -529,19 +535,26 @@ hello_msg(State) ->
 check_auth(AuthMsg, State) 
     when  is_record(AuthMsg, cipherl_auth)
     ->
+    {cipherl_auth, BobNode, BobNonce, BobPubKey, Payload, Signed} = AuthMsg,
     try 
-        {_, Node, {cipherl_msg, Payload, Signed}} = AuthMsg,
         % Check node is a pending one, and get expected nonce
-        Nonce =
-        case maps:find(pending, State) of
-            error         -> throw(no_pending_auth);
-            {ok, Pending} ->
-                case maps:find(Node, Pending) of
-                    error -> throw(invalid_pending_node),
-                             0;
-                    {ok, N} -> N
-                end
-        end,
+        logger:info("Treating auth message from ~p", [BobNode]),
+        Nonce = case maps:find(pending, State) of
+                    error -> 
+                        logger:debug("~p : No pending node(s)", [BobNode]),
+                        throw(no_pending_auth);
+                    {ok, Pending} ->
+                        case maps:find(BobNode, Pending) of
+                            error -> 
+                                logger:debug("~p : Node was NOT pending", [BobNode]),
+                                throw(not_pending_node),
+                                0;
+                            {ok, N} -> 
+                                logger:debug("~p : Node was pending", [BobNode]),
+                                N
+                        end
+                end,
+        
         % Check algos are compatible
         %case cipherl_algos_fsm:compatible(Algos) of
         %    false -> throw(incompatible_algos);
@@ -549,32 +562,65 @@ check_auth(AuthMsg, State)
         %end,
         % Decrypt payload with my private key
         Bin  = public_key:decrypt_private(Payload, maps:get(private, State)),
-        Data =
-        case (catch erlang:binary_to_term(Bin, [safe])) of
-            {'EXIT',{badarg,_ }} 
-                 -> logger:debug(Bin),
-                   throw(invalid_payload),
-                   [];
-            D when is_record(D, cipherl_chal)
-                 -> D;
-            D -> logger:debug(D),
-                    throw(invalid_response),
-                    []
-        end,
-        {cipherl_chal, ChalNode, ChalNonce, Random} = Data,
+        logger:debug("~p : Challenge payload was decrypted with success", [BobNode]),
+        Data =  case (catch erlang:binary_to_term(Bin, [safe])) of
+                    {'EXIT',{badarg,_ }} 
+                         -> logger:debug(Bin),
+                           throw(invalid_payload),
+                           [];
+                    D when is_record(D, cipherl_chal)
+                         -> D;
+                    D -> logger:debug(D),
+                            throw(invalid_response),
+                            []
+                end,
+        logger:debug("~p : Challenge term is a valid cipherl_chal record", [BobNode]),
+        {cipherl_chal, HelloNode, HelloNonce, BobNonce2, Random} = Data,
         % Check node is myself
-        ChalNode = node(),
+        case (HelloNode =:= node()) of
+            true  -> logger:debug("~p : Node in challenge is current node", [BobNode]) ;
+            false -> logger:warning("~p : Node in challenge is NOT current node", [BobNode]),
+                     throw(invalid_challenge)
+        end,
         % Check nonce was the one sent
-        ChalNonce = Nonce,
+        case (HelloNonce =:= Nonce) of 
+            true  -> logger:debug("~p : Nonce in challenge is expected one", [BobNode]) ;
+            false -> logger:warning("~p : Nonce in challenge is NOT the expected one (~p =/= ~p)", [BobNode, Nonce, HelloNonce]),
+                     throw(invalid_challenge)
+        end,
+        % Check both Bob Nonce are the same
+        case (BobNonce =:= BobNonce2) of 
+            true  -> logger:debug("~p : Nonce in challenge is same than clear Nonce in auth message", [BobNode]) ;
+            false -> logger:warning("~p : Nonce in challenge is NOT the same than clear one (~p =/= ~p)", [BobNode, BobNonce, BobNonce2]),
+                     throw(invalid_challenge)
+        end,
         % Check random is not empty
         case lists:member(Random, [[],<<"">>, {}, #{}, 0]) of
             true   -> throw(invalid_empty_random);
             false  -> ok
         end,
-        PubKey = erlang:get(Node),
+        logger:debug("~p : Random value in challenge is not empty", [BobNode]),
+        PubKey = case erlang:get({pubkey, BobNode}) of 
+                    undefined ->
+                        logger:debug("~p : Pubkey was not known before, using it", [BobNode]),
+                        BobPubKey ;
+                    X when (X =:= BobPubKey) -> 
+                        logger:debug("~p : Pubkey was known and is the same in challenge", [BobNode]),
+                        X ;
+                    X -> % Decide later if it is a security issue
+                        logger:warning("~p : Pubkey in challenge is NOT the same than already known", [BobNode]),
+                        X
+                 end,
+        logger:debug("~p : verifying signature of payload", [BobNode]),
         % Verify signature
         true = public_key:verify(Bin, ?DIGEST, Signed, PubKey) 
     catch
+        _:not_pending_node ->
+            case maps:is_key(BobNode, maps:get(nodes, State)) of
+                true  -> logger:info("~p : already authentified", [BobNode]);
+                false -> logger:notice("~p : not pending and not known", [BobNode])
+            end,
+            true;
         C:E:S -> 
             logger:warning("Invalid auth message : ~p", [E]),
             logger:info("~p", [AuthMsg]),
