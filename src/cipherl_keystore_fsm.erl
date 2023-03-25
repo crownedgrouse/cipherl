@@ -289,7 +289,8 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                                ok
                  end
         end,
-
+        %% sync before
+        global:sync(),
         %% OK we can go further
         case global:whereis_name({cipherl_ks, Node}) of
             undefined 
@@ -401,13 +402,20 @@ monitor_nodes(info, Msg, StateData)
                          [] -> [];
                          D  -> {user_dir, D}
                      end,
+                KT = maps:get(ssh_pubkey_alg, Conf, 'ssh-ecdsa-nistp521'),
                 Options = lists:flatten([UD]),
                 % TODO check if already existing before adding
-                case ssh_file:add_host_key(Host, Port, PubKey, Options) of
-                    ok -> ok;
-                    {error, T} -> 
-                        logger:debug({error, T}),
-                        throw(add_host_key_failure)
+                F = ssh_file:is_host_key(PubKey, Host, Port, KT, Options),
+                case F of
+                    true -> 
+                        logger:notice("~p : Host already existing in known_hosts (~p, ~p, ~p). Skipping.", [BobNode, Host, Port, KT]);
+                    false -> 
+                        case ssh_file:add_host_key(Host, Port, PubKey, Options) of
+                            ok -> ok;
+                            {error, T} -> 
+                                logger:debug({error, T}),
+                                throw(add_host_key_failure)
+                        end
                 end
         end,
         % Add node to authentified nodes and remove from pending
