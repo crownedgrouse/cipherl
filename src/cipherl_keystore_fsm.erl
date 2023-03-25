@@ -285,7 +285,7 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                  case is_hostname_allowed(Host, Conf) of
                       false -> throw(unauthorized_host);
                       true  -> logger:info("Host ~p was found in 'know_hosts'", [Host]),
-                               gen_event:notify(cipherl_event, {authorized_host, Node}),
+                               gen_event:notify(cipherl_event, {authorized_node, Node}),
                                ok
                  end
         end,
@@ -411,17 +411,20 @@ monitor_nodes(info, Msg, StateData)
                         logger:notice("~p : Host already existing in known_hosts (~p, ~p, ~p). Skipping.", [BobNode, Host, Port, KT]);
                     false -> 
                         case ssh_file:add_host_key(Host, Port, PubKey, Options) of
-                            ok -> ok;
+                            ok -> gen_event:notify(cipherl_event, {authorized_host, {Host, Port, KT}}),
+                                  ok;
                             {error, T} -> 
                                 logger:debug({error, T}),
                                 throw(add_host_key_failure)
                         end
-                end
+                end                
         end,
         % Add node to authentified nodes and remove from pending
         Map1 = maps:put(BobNode, BobNonce, maps:get(nodes, StateData)),
         Map2 = maps:remove(BobNode, maps:get(pending, StateData)),
         NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
+        % Sent event and log
+        gen_event:notify(cipherl_event, {authentified_node, BobNode}),
         logger:notice("node ~p was authentified", [BobNode]),
         {next_state, monitor_nodes, NewStateData}
     catch

@@ -7,9 +7,10 @@ init(_Args) ->
     {ok, []}.
 
 handle_event({pid, Pid}, _State) when is_pid(Pid),(Pid =/= self()) ->
-    logger:debug("Sec event will be sent to ~p", [Pid]),
+    logger:notice("Sec event will be sent to ~p", [Pid]),
     {ok, Pid};
 handle_event(X, Pid) when is_pid(Pid) ->
+    logger:notice("Sec event ~p will be sent to ~p", [X, Pid]),
 	Pid ! X,
     {ok, Pid};
 handle_event(X, State) ->

@@ -109,7 +109,7 @@
     PK = pkmap(ST),
 
     % Add Bob's pubkey in known_hosts
-    file:delete(filename:join(AD, "known_hosts")),
+    %file:delete(filename:join(AD, "known_hosts")),
     active_key(AD, ST),
     active_key(BD, ST),
     {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
@@ -172,15 +172,15 @@
  %% N = integer() | forever
  %%--------------------------------------------------------------------
  groups() ->
-     [{add_host_key,     [parallel], [add_host_key_true_ok, add_host_key_true_ko, add_host_key_false_ok, add_host_key_false_ko]}
-     ,{hidden_node,      [parallel], [hidden_node_true, hidden_node_false]}
-     ,{mod_passphrase,   [parallel], [mod_passphrase_none_ok, mod_passphrase_none_ko, mod_passphrase_invalid, mod_passphrase_ok, mod_passphrase_ko]}
-     ,{rpc_enabled,      [parallel], [rpc_enabled_true, rpc_enabled_true_pending, rpc_enabled_false]}
-     ,{security_handler, [parallel], [security_handler_valid, security_handler_invalid, security_handler_missing]}
-     ,{system_dir,       [parallel], [system_dir_ok, system_dir_ko]}
-     ,{ssh_dir,          [parallel], [ssh_dir_system, ssh_dir_user]}
-     ,{ssh_pubkey_alg,   [parallel], [ssh_pubkey_alg_missing, ssh_pubkey_alg_invalid]}
-     ,{user_dir,         [parallel], [user_dir_ok, user_dir_ko]}
+     [{add_host_key,     [sequence], [add_host_key_true_ok, add_host_key_true_ko, add_host_key_false_ok, add_host_key_false_ko]}
+     ,{hidden_node,      [sequence], [hidden_node_true, hidden_node_false]}
+     ,{mod_passphrase,   [sequence], [mod_passphrase_none_ok, mod_passphrase_none_ko, mod_passphrase_invalid, mod_passphrase_ok, mod_passphrase_ko]}
+     ,{rpc_enabled,      [sequence], [rpc_enabled_true, rpc_enabled_true_pending, rpc_enabled_false]}
+     ,{security_handler, [sequence], [security_handler_valid, security_handler_invalid, security_handler_missing]}
+     ,{system_dir,       [sequence], [system_dir_ok, system_dir_ko]}
+     ,{ssh_dir,          [sequence], [ssh_dir_system, ssh_dir_user]}
+     ,{ssh_pubkey_alg,   [sequence], [ssh_pubkey_alg_missing, ssh_pubkey_alg_invalid]}
+     ,{user_dir,         [sequence], [user_dir_ok, user_dir_ko]}
      ].
 
  %%--------------------------------------------------------------------
@@ -279,25 +279,27 @@ test_case_common(X) ->
  %% Comment = term()
  %%--------------------------------------------------------------------
 add_host_key_true_ok(Config) ->  
-    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
+    ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
     ct:comment("Alice add Bob's public key in known_hosts and allow Bob to connect"),
+    % stop cipherl at Alice
+    application:stop(cipherl),
     Conf = [{add_host_key, true}] ++ 
            proplists:get_value(cipherl_ct, Config, []) ,
     ct:log(?_("Config at Alice's side: ~p", [Conf])),
     % remove current known_hosts created by init_per_group
     AD = proplists:get_value(user_dir, Conf),
     KH = filename:join(AD, "known_hosts"),
-    file:delete(KH),
-    file:write_file(KH, ""),
-    file:change_mode(KH, 8#00644),
-    % stop cipherl at Alice
-    application:stop(cipherl),
+    ct:pal(?_("Alices's KH file : ~p",[KH])),
+    ok = file:delete(KH),
+    ok = file:write_file(KH, ""),
+    %ok = file:change_mode(KH, 8#00644),
     % start a peer Bob
     {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash, connection => standard_io}),
     % launch cipherl at Bob side with a config set before
     PKA = proplists:get_value(ssh_pubkey_alg, Conf),
     ct:log(?_("pubkey: ~p", [PKA])),
     BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
+    ct:pal(?_("Bob's KH file : ~p ",[KH])),
     _C0 = peer:call(Peer, application, set_env, [cipherl, ssh_dir, user, [{persistent, true}]]),
     _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD, [{persistent, true}]]),
     _C2 = peer:call(Peer, application, set_env, [cipherl, ssh_pubkey_alg, PKA, [{persistent, true}]]),
@@ -323,21 +325,22 @@ add_host_key_true_ok(Config) ->
     net_adm:ping(Node),
     % verify Bob is recorded in known_host
     receive 
-        {authorized_host, Node} 
+        {authorized_host, _} 
             -> ct:pal(?_("~p was authorized in known_hosts", [Node])),
                % verify Bob is allowed to connect
                ok;
         Other 
             -> ct:pal(?_("Received : ~p", [Other])),
-               peer:stop(Peer),
                ct:fail({unexpected_msg, Other})
-    end.
+    end,
+    peer:stop(Peer),
+    ok.
 add_host_key_true_ko(_Config) ->  
-    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
+    ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
     ct:comment("Alice do not add Bob in known_hosts due to invalid public key"),
     ok.
 add_host_key_false_ok(Config) -> 
-    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
+    ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
     ct:comment("Alice has Bob's public key already recorded and allow Bob to try authentication"),
     % Set config for Alice
     Conf = [{add_host_key, false}] ++ 
@@ -349,7 +352,7 @@ add_host_key_false_ok(Config) ->
     %ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
 
     receive 
-        {authorized_host, Node} 
+        {authorized_host, _} 
             -> ct:pal(?_("~p was authorized in known_hosts", [Node]));
         Other 
             -> ct:fail({unexpected_msg, Other})
@@ -358,7 +361,7 @@ add_host_key_false_ok(Config) ->
     peer:stop(Peer),
     ok.
 add_host_key_false_ko(_Config) ->  
-    ct:pal("=== ~p ===", [?FUNCTION_NAME]),
+    ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
     ct:comment("Alice has Bob's public key already recorded and refuse connection to Bob due to invalid challenge"),
     ok.
 hidden_node_true(_Config) ->  ok.
