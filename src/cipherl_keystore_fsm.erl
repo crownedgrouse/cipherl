@@ -61,10 +61,10 @@
 -else.
     % Disconnect it
     -define(DISCONNECT(Node),
+        erlang:display(erlang:disconnect_node(Node)),
         erlang:set_cookie(Node, 
             erlang:list_to_atom(lists:flatten(io_lib:format("~p", 
-            [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})])))),
-        erlang:disconnect_node(Node)).
+            [erlang:phash2({erlang:monotonic_time(), rand:bytes(100)})]))))).
     -define(INITT,ok).
 -endif.
 %% API.
@@ -263,6 +263,8 @@ monitor_nodes(info, {nodedown, Node, _}, StateData) ->
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {nodeup, Node, _}, StateData) ->
     logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, nodeup, hide_sensitive(StateData)]),
+    % Get hostname from Node
+    Host = get_host_from_node(Node),
     try
         Conf = maps:get(conf, StateData),
         %% Fatal checks
@@ -279,39 +281,34 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
         case maps:get(add_host_key, Conf, false) of
             true  -> ok ;
             false -> 
-                % Get hostname from Node
-                 Host = get_host_from_node(Node),
                  % Check hostname is allowed
                  case is_hostname_allowed(Host, Conf) of
-                      false -> throw(unauthorized_host);
+                      false -> erlang:display("*********** ICI ************"),
+                        throw(unauthorized_host);
                       true  -> logger:info("Host ~p was found in 'know_hosts'", [Host]),
-                               gen_event:notify(cipherl_event, {authorized_node, Node}),
+                               gen_event:notify(cipherl_event, {authorized_host, Host}),
                                ok
                  end
         end,
-        %% sync before
-        global:sync(),
         %% OK we can go further
-        case global:whereis_name({cipherl_ks, Node}) of
-            undefined 
-                ->  
-                logger:notice("cipherl is not (already ?) started at ~p", [Node]),
-                net_adm:ping(Node),
-                % Start a timer for node timeout 
-                Time = get_timer(),
-                {ok, TRef} =  timer:send_after(Time, {node_timeout, Node}),
-                erlang:put(Node, TRef),
-                logger:debug("Start ~p ms timer - node_timeout: ~p", [Time, TRef]);
-            _   -> % cipherl exists at remote side
-                self() ! {node_timeout, Node},
-                ok 
-        end,
+        Attempts = maps:get(attempt, Conf),
+        Time = get_timer(),
+        % Do attempt - 1 check until timeout
+        A = case (Attempts > 1) of 
+                false -> 1;
+                true  -> Attempts - 1
+            end,
+        DTime = round(Time / A),
+        logger:info("Configuring ~p ms timer (~p attempts) for node ~p", [Time, Attempts, Node]),
+        {ok, TRef} =  timer:send_after(DTime, {node_timeout, Node, (A - 1), DTime}),
+        erlang:put(Node, TRef),
+        logger:debug("Start ~p ms timer (remaining attempts #~p) for ~p - node_timeout: ~p", [DTime, A, Node, TRef]),
         {next_state, monitor_nodes, StateData}
     catch
         _:unauthorized_host ->
                     rogue(Node),
-                    gen_event:notify(cipherl_event, {unauthorized_host, Node}),
-                    logger:warning("Rejecting node ~p : unauthorized host", [Node]),
+                    gen_event:notify(cipherl_event, {unauthorized_host, Host}),
+                    logger:warning("Rejecting node ~p : unauthorized host ~p", [Node, Host]),
                     {next_state, monitor_nodes, StateData};
         _:hidden -> rogue(Node),
                     gen_event:notify(cipherl_event, {unauthorized_hidden, Node}),
@@ -322,15 +319,39 @@ monitor_nodes(info, {nodeup, Node, _}, StateData) ->
                     {next_state, monitor_nodes, StateData}
     end;
 %%-------------------------------------------------------------------------
-%% @doc Receive node timeout while connected but remote cîpherl wasn't found
+%% @doc Receive node timeout while connected but remote cîpherl wasn't found so far
 %% @end
 %%-------------------------------------------------------------------------
-monitor_nodes(info, {node_timeout, Node}, StateData) ->
+
+monitor_nodes(info, {node_timeout, Node, Remain, DTime}, StateData) when (Remain > 0)->
+    global:sync(),
+    case global:whereis_name({cipherl_ks, Node}) of
+        undefined 
+            ->  
+            net_adm:ping(Node),
+            % Start a timer for node timeout 
+            {ok, TRef} =  timer:send_after(DTime, {node_timeout, Node, (Remain - 1), DTime}),
+            erlang:put(Node, TRef),
+            logger:debug("Start ~p ms timer (remaining attempts #~p) for ~p - node_timeout: ~p", [DTime, Remain, Node, TRef]);
+        _   -> % cipherl exists at remote side (fake a final timeout)
+            self() ! {node_timeout, Node, 0, DTime},
+            ok 
+    end,
+    {next_state, monitor_nodes, StateData};
+monitor_nodes(info, {node_timeout, Node, 0, _}, StateData) ->
     logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, node_timeout, hide_sensitive(StateData)]),
+    Conf = maps:get(conf, StateData),
+    TM = maps:get(trust_mode, Conf),
+    %% sync before a last (or a forced) attempt
+    global:sync(),
     case global:whereis_name({cipherl_ks, Node}) of
         undefined -> 
             logger:info("cipherl still not found in global registry for ~p", [Node]),
-            rogue(Node),
+            case TM of
+                1 -> logger:warning("Unauthenticated node ~p allowed to connect (trust_mode=~p)", [Node, TM]);
+                _ -> rogue(Node),
+                     logger:notice("~p~p Disconnecting rogue node (trust_mode=~p): ~p", [?MODULE, self(), TM, Node])
+            end,
             {next_state, monitor_nodes, StateData};
         Pid when is_pid(Pid) -> 
             % Affect a Nonce to Bob
@@ -355,10 +376,17 @@ monitor_nodes(info, {node_timeout, Node}, StateData) ->
 %%-------------------------------------------------------------------------
 monitor_nodes(info, {hello_timeout, Node}, StateData) ->
     logger:info("~p~p event received from ~p: ~p while in state ~p", [?MODULE, self(), Node, hello_timeout, hide_sensitive(StateData)]),
+    Conf = maps:get(conf, StateData),
+    TM = maps:get(trust_mode, Conf),
     logger:warning("Hello timeout for node ~p", [Node]),
     Map1 = maps:remove(Node, maps:get(pending, StateData)),
     NewStateData = maps:merge(StateData, #{pending => Map1}),
     logger:notice("Removing node ~p from pending", [Node]),
+    case TM of
+        1 -> logger:warning("Unauthenticated node ~p allowed to connect", [Node]);
+        _ -> rogue(Node)
+    end,
+    gen_event:notify(cipherl_event, {hello_timeout, Node}),
     {next_state, monitor_nodes, NewStateData};
 %%-------------------------------------------------------------------------
 %% @doc Treat auth message
@@ -404,14 +432,14 @@ monitor_nodes(info, Msg, StateData)
                      end,
                 KT = maps:get(ssh_pubkey_alg, Conf, 'ssh-ecdsa-nistp521'),
                 Options = lists:flatten([UD]),
-                % TODO check if already existing before adding
+                % Check if already existing before adding
                 F = ssh_file:is_host_key(PubKey, Host, Port, KT, Options),
                 case F of
                     true -> 
                         logger:notice("~p : Host already existing in known_hosts (~p, ~p, ~p). Skipping.", [BobNode, Host, Port, KT]);
                     false -> 
                         case ssh_file:add_host_key(Host, Port, PubKey, Options) of
-                            ok -> gen_event:notify(cipherl_event, {authorized_host, {Host, Port, KT}}),
+                            ok -> gen_event:notify(cipherl_event, {authorized_host, Host}),
                                   ok;
                             {error, T} -> 
                                 logger:debug({error, T}),
@@ -419,16 +447,17 @@ monitor_nodes(info, Msg, StateData)
                         end
                 end                
         end,
-        % Add node to authentified nodes and remove from pending
+        % Add node to authenticated nodes and remove from pending
         Map1 = maps:put(BobNode, BobNonce, maps:get(nodes, StateData)),
         Map2 = maps:remove(BobNode, maps:get(pending, StateData)),
         NewStateData = maps:merge(StateData, #{nodes => Map1, pending => Map2}),
         % Sent event and log
-        gen_event:notify(cipherl_event, {authentified_node, BobNode}),
-        logger:notice("node ~p was authentified", [BobNode]),
+        gen_event:notify(cipherl_event, {authenticated_node, BobNode}),
+        logger:notice("node ~p was authenticated", [BobNode]),
         {next_state, monitor_nodes, NewStateData}
     catch
         _:add_host_key_failure -> 
+             gen_event:notify(cipherl_event, {unauthenticated_node, BobNode}),
              logger:error("~p~p Failure while adding host key for node: ~p", [?MODULE, self(), BobNode]);
         _:unexpected_auth_msg  -> 
              logger:notice("~p~p Received auth message for not pending node: ~p", [?MODULE, self(), BobNode]),
@@ -628,7 +657,7 @@ check_auth(AuthMsg, State)
     catch
         _:not_pending_node ->
             case maps:is_key(BobNode, maps:get(nodes, State)) of
-                true  -> logger:info("~p : already authentified", [BobNode]);
+                true  -> logger:info("~p : already authenticated", [BobNode]);
                 false -> logger:notice("~p : not pending and not known", [BobNode])
             end,
             true;
@@ -650,11 +679,14 @@ check_auth(AuthMsg, _State) ->
 -spec rogue(any()) -> boolean().
 
 rogue(Node) when is_atom(Node),(Node =/= node()) ->
+    erlang:display(erlang:disconnect_node(Node)),
     % Set an random cookie to this node
     ?DISCONNECT(node),
     gen_event:notify(cipherl_event, {rogue_node, Node}),
     true;
-rogue(_) -> false.
+rogue(_) -> 
+    erlang:display(rogue_on_invalid_node),
+    false.
 
 %%-------------------------------------------------------------------------
 %% @doc Get public Key of a node
@@ -674,16 +706,19 @@ get_pubkey_from_node(Node, StateData)
 -spec load_config() -> map().
 
 load_config() ->
-    Default = #{add_host_key => false
-               ,hidden_node  => false
-               ,local_node   => false
-               ,rpc_enabled  => false
+    Default = #{add_host_key     => false
+               ,attempt          => 10
+               ,check_rs         => true
+               ,hidden_node      => false
+               ,local_node       => false
+               ,nonce_tolerance  => 0
+               ,rpc_enabled      => false
                ,security_handler => []
-               ,ssh_dir      => user
-               ,ssh_pubkey_alg => ''
-               ,ssh_dir_override => false
-               ,user_dir => []
-               ,system_dir => []
+               ,ssh_dir          => user
+               ,user_dir         => []
+               ,system_dir       => []
+               ,ssh_pubkey_alg   => 'ssh-ecdsa-nistp521'
+               ,trust_mode       => 0
                },
     % Find keys in config, and check validity
     Keys   = maps:keys(Default),
@@ -711,8 +746,6 @@ check_conf_type(K = local_node, V) when is_boolean(V)
 check_conf_type(K = rpc_enabled, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = security_handler, V) when is_list(V) 
-    ->  {K, V};
-check_conf_type(K = ssh_dir_override, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(_K = user_dir, V) when is_list(V),(V =:= [])
     -> [];
@@ -963,8 +996,11 @@ is_hostname_allowed(Host, Conf)
     case lists:member(Host, Hosts) of
         true -> true ;
         false -> 
-            Pred = fun(X) -> N = string:split(X, ","),
-                             lists:member(Host, N)
+            Pred = fun(X) -> 
+                        case re:run(X, "\\[" ++ Host ++ "\\]") of
+                            nomatch    -> false;
+                            {match, _} -> true
+                        end
                    end,
             lists:any(Pred, Hosts)
     end.

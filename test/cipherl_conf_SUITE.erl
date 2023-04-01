@@ -335,9 +335,29 @@ add_host_key_true_ok(Config) ->
     end,
     peer:stop(Peer),
     ok.
-add_host_key_true_ko(_Config) ->  
+add_host_key_true_ko(Config) ->  %% TODO
     ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
     ct:comment("Alice do not add Bob in known_hosts due to invalid public key"),
+    %%  Start a peer node bob with a fake cipherl sending crap
+    % Set config for Alice
+    Conf = [{add_host_key, true}] ++ 
+           proplists:get_value(cipherl_ct, Config, []) ,
+    ct:log(?_("Cipherl config : ~p", [Conf])),
+    % Starting Bob 
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob2, shutdown => halt, peer_down => crash}),
+    ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
+    X = peer:call(Peer, cipherl_fake, start, [add_host_key_true_ko]),
+    ct:pal(?_("~p", [X])),
+    % Start Alice
+    start_with_handler(Conf),
+    peer:call(Peer, net_adm, ping, [node()]),
+    net_adm:ping(Node),
+
+    receive 
+        Msg -> ct:pal(?_("received ~p", [Msg])), ok
+        after 5000 -> ct:fail(timeout)
+    end,    
+    peer:stop(Peer),
     ok.
 add_host_key_false_ok(Config) -> 
     ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
@@ -345,15 +365,15 @@ add_host_key_false_ok(Config) ->
     % Set config for Alice
     Conf = [{add_host_key, false}] ++ 
            proplists:get_value(cipherl_ct, Config, []) ,
-    %ct:log(?_("Cipherl config : ~p", [Conf])),
+    ct:log(?_("Cipherl config : ~p", [Conf])),
     start_with_handler(Conf),
     % Starting Bob 
     {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash}),
-    %ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
+    ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
 
     receive 
         {authorized_host, _} 
-            -> ct:pal(?_("~p was authorized in known_hosts", [Node]));
+            -> ct:pal(?_("~p is known in known_hosts", [Node]));
         Other 
             -> ct:fail({unexpected_msg, Other})
     after 5000 -> ct:fail(timeout)
