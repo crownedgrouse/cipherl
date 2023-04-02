@@ -32,6 +32,18 @@
      onload() -> erlang:display(?ERROR_REL), error.
 -endif.
 
+-ifdef(OTP_RELEASE).
+  %% OTP 25 or higher : function documented
+  -if(?OTP_RELEASE >= 25).
+    -define(PUBKEY(X), ssh_file:extract_public_key(X)).
+  -else.
+    -define(PUBKEY(X), ssh_transport:extract_public_key(X)).
+  -endif.
+-else.
+  %% OTP 20 or lower.
+    -define(PUBKEY(X), ssh_transport:extract_public_key(X)).
+-endif.
+
  %%--------------------------------------------------------------------
  %% Function: suite() -> Info
  %% Info = [tuple()]
@@ -294,12 +306,13 @@ add_host_key_true_ok(Config) ->
     ok = file:write_file(KH, ""),
     %ok = file:change_mode(KH, 8#00644),
     % start a peer Bob
-    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => halt, peer_down => crash, connection => standard_io}),
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => close, peer_down => crash, connection => standard_io}),
     % launch cipherl at Bob side with a config set before
     PKA = proplists:get_value(ssh_pubkey_alg, Conf),
     ct:log(?_("pubkey: ~p", [PKA])),
     BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
-    ct:pal(?_("Bob's KH file : ~p ",[KH])),
+    KHB = filename:join(BD, "known_hosts"),
+    ct:pal(?_("Bob's KH file : ~p ",[KHB])),
     _C0 = peer:call(Peer, application, set_env, [cipherl, ssh_dir, user, [{persistent, true}]]),
     _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD, [{persistent, true}]]),
     _C2 = peer:call(Peer, application, set_env, [cipherl, ssh_pubkey_alg, PKA, [{persistent, true}]]),
@@ -326,11 +339,11 @@ add_host_key_true_ok(Config) ->
     % verify Bob is recorded in known_host
     receive 
         {authorized_host, _} 
-            -> ct:pal(?_("~p was authorized in known_hosts", [Node])),
+            -> ct:log(?_("~p was authorized in known_hosts", [Node])),
                % verify Bob is allowed to connect
                ok;
         Other 
-            -> ct:pal(?_("Received : ~p", [Other])),
+            -> ct:log(?_("Received : ~p", [Other])),
                ct:fail({unexpected_msg, Other})
     end,
     peer:stop(Peer),
@@ -344,18 +357,19 @@ add_host_key_true_ko(Config) ->  %% TODO
            proplists:get_value(cipherl_ct, Config, []) ,
     ct:log(?_("Cipherl config : ~p", [Conf])),
     % Starting Bob 
-    {ok, Peer, Node} = ?CT_PEER(#{name => bob2, shutdown => halt, peer_down => crash}),
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => close, peer_down => crash, connection => standard_io}),
     ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
-    X = peer:call(Peer, cipherl_fake, start, [add_host_key_true_ko]),
-    ct:pal(?_("~p", [X])),
+    {ok, _ } = peer:call(Peer, cipherl_fake, start, [add_host_key_true_ko]),
     % Start Alice
     start_with_handler(Conf),
     peer:call(Peer, net_adm, ping, [node()]),
     net_adm:ping(Node),
 
     receive 
-        Msg -> ct:pal(?_("received ~p", [Msg])), ok
-        after 5000 -> ct:fail(timeout)
+        {rogue_node, N} -> ct:log(?_("received expected rogue node event for ~p", [N])), ok ;
+        Msg ->  ct:pal(?_("received: ~p", [Msg])),
+                ct:fail(unexpected_msg)
+        after 10000 -> ct:fail(timeout)
     end,    
     peer:stop(Peer),
     ok.
@@ -373,16 +387,61 @@ add_host_key_false_ok(Config) ->
 
     receive 
         {authorized_host, _} 
-            -> ct:pal(?_("~p is known in known_hosts", [Node]));
+            -> ct:log(?_("~p is known in known_hosts", [Node]));
         Other 
             -> ct:fail({unexpected_msg, Other})
     after 5000 -> ct:fail(timeout)
     end,
     peer:stop(Peer),
     ok.
-add_host_key_false_ko(_Config) ->  
+add_host_key_false_ko(Config) ->  
     ct:pal(?_("=== ~p ===", [?FUNCTION_NAME])),
     ct:comment("Alice has Bob's public key already recorded and refuse connection to Bob due to invalid challenge"),
+    %%  Start a peer node bob with a fake cipherl sending crap
+    % Set config for Alice
+    Conf = [{add_host_key, false}] ++ 
+           proplists:get_value(cipherl_ct, Config, []) ,
+    ct:log(?_("Cipherl config : ~p", [Conf])),
+    % Starting Bob 
+    {ok, Peer, Node} = ?CT_PEER(#{name => bob, shutdown => close, peer_down => crash, connection => standard_io}),
+    ct:log(?_("PeerPid : ~p~nNode    : ~p", [Peer, Node])),
+    {ok, _ } = peer:call(Peer, cipherl_fake, start, [add_host_key_false_ko]),
+    %  set a valid public key to use at fake side
+    BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
+    KT = proplists:get_value(ssh_pubkey_alg, Conf),
+    PT = case KT of
+            'ssh-rsa' -> rsa_pass_phrase ;
+            Z -> Z
+         end,
+    Args = [{user_dir, BD}, {PT, "bobbob"}],
+    Private = 
+            case ssh_file:user_key(KT, Args) of
+                {ok, Priv}      -> Priv;
+                {error, Reason} -> 
+                    ct:log(?_("ssh_file:user_key error : ~p", [Reason])),
+                    ct:fail(privatekey_extract)
+            end,
+    Public = ?PUBKEY(Private),
+    peer:call(Peer, erlang, send, [cipherl_ks, {pubkey, Public}]),
+    % Start Alice
+    start_with_handler(Conf),
+    peer:call(Peer, net_adm, ping, [node()]),
+
+    receive 
+        {authorized_host,_} -> ok ;
+        Msg1 -> 
+            ct:log(?_("received: ~p", [Msg1])),
+            ct:fail(unexpected_msg)
+        after 10000 -> ct:fail(timeout)
+    end,
+    receive 
+        {rogue_node, N} -> ct:log(?_("received expected rogue node event for ~p", [N])), ok ;
+        Msg2 -> 
+            ct:log(?_("received: ~p", [Msg2])),
+            ct:fail(unexpected_msg)
+        after 10000 -> ct:fail(timeout)
+    end,    
+    peer:stop(Peer),
     ok.
 hidden_node_true(_Config) ->  ok.
 hidden_node_false(_Config) ->  ok.
