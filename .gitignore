@@ -6,3 +6,6 @@ ebin/
 cipherl.d
 deps/
 test/*.beam
+config/sys.config
+erlang_ls.config
+logs/

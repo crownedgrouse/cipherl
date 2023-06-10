@@ -80,7 +80,8 @@
      application:stop(ssh),
      application:set_env([  
         {kernel,
-                [ {logger_level, all}
+                [{logger_level, all}
+                ,{dist_auto_connect, once}
                 ,{logger,
                     [{handler, default, logger_std_h,
                     #{ formatter => {logger_formatter, #{ }}}}]
