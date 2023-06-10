@@ -17,15 +17,15 @@
 },
 {stdlib, [{restricted_shell, cipherl_rs}]},
 {cipherl,
- [{add_host_key, true}
+ [{add_host_key, false}
  ,{hidden_node, false}
  ,{local_node, false}
  ,{security_handler, []}
  ,{ssh_dir, user}
- ,{ssh_pubkey_alg, 'ssh-rsa'}
+ %,{ssh_pubkey_alg, 'ssh-rsa'}
  ,{ssh_sysdir_override, false}
  ,{ssh_userdir_override, false}
- ,{user_dir, "/home/eric/tmp/keys"}
+ %,{user_dir, ""}
  ,{check_rs, true}
  ]}
 ].
