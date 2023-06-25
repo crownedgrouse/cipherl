@@ -57,7 +57,13 @@
     % Do not really disconnect node for common tests, to allow clean peer:stop/1 .
     -define(DISCONNECT(Node),logger:info("cipherl would have disconnect node ~p", [Node])).
     -warning("Compiling specially for common tests. Do not use in production.").
-    -define(INITT,logger:warning("!!! Compiled for common tests. Do not use in production.")).
+    -define(INITT,
+        case whereis(ct_util_server) of
+            undefined -> 
+                logger:warning("!!! Compiled for common tests. Do not use in production.");
+            _ -> ok
+        end
+        ).
 -else.
     % Disconnect it
     -define(DISCONNECT(Node),

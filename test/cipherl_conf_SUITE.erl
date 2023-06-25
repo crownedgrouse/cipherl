@@ -59,8 +59,8 @@
  %%--------------------------------------------------------------------
  init_per_suite(Config) -> 
      %ct:print(io_lib:format("Suite config  : ~p", [Config])),
-     % L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'],
-     L = [rsa],
+     %L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
+     L = [rsa], % overide if required or wanting limit list
      % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
@@ -120,12 +120,14 @@
     AD = filename:join(code:priv_dir(cipherl), "test/alice/.ssh/"),
     BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
     PK = pkmap(ST),
+    PKPP = pkppmap(ST),
+    erlang:put(pkpp, PKPP),
 
     % Add Bob's pubkey in known_hosts
     %file:delete(filename:join(AD, "known_hosts")),
     active_key(AD, ST),
     active_key(BD, ST),
-    {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{rsa_pass_phrase,"bobbob"}]),
+    {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{PKPP,"bobbob"}]),
     BPubKey = ssh_file:extract_public_key(BPrivKey),
     ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
     Config ++ [{cipherl_ct, [{mod_passphrase,cipherl_alicesecret}, {ssh_dir,user},{check_rs, false},{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
@@ -480,6 +482,20 @@ pkmap('ecdsa.25519') -> 'ssh-ed25519' ;
 pkmap(X)   -> ct:pal(?_("pkmap arg not found: ~p", [X])),
               exit(1).
 
+
+%%-------------------------------------------------------------------------
+%% @doc Map private key filename to public key also
+%% @end
+%%-------------------------------------------------------------------------
+pkppmap(rsa)           -> 'rsa_pass_phrase' ;
+pkppmap('dsa.1024')    -> 'dsa_pass_phrase' ;
+pkppmap('ecdsa.256')   -> 'ecdsa_pass_phrase' ;
+pkppmap('ecdsa.384')   -> 'ecdsa_pass_phrase' ;
+pkppmap('ecdsa.521')   -> 'ecdsa_pass_phrase' ;
+pkppmap('ecdsa.25519') -> 'ecdsa_pass_phrase' ;
+pkppmap(X)   -> ct:pal(?_("pkppmap arg not found: ~p", [X])),
+              exit(1).
+
 %%-------------------------------------------------------------------------
 %% @doc Map public key to compilation macro for passphase
 %% @end
@@ -498,6 +514,16 @@ pktype(_) -> none.
 %%-------------------------------------------------------------------------
 active_key(Dir, rsa)
     -> ok = active_key(key_path(Dir, "id_rsa.key"));
+active_key(Dir, 'dsa.1024')
+    -> ok = active_key(key_path(Dir, "id_dsa.1024"));
+active_key(Dir, 'ecdsa.256')
+    -> ok = active_key(key_path(Dir, "id_ecdsa.256"));
+active_key(Dir, 'ecdsa.384')
+    -> ok = active_key(key_path(Dir, "id_ecdsa.384"));
+active_key(Dir, 'ecdsa.521')
+    -> ok = active_key(key_path(Dir, "id_ecdsa.521"));
+active_key(Dir, 'ecdsa.25519')
+    -> ok = active_key(key_path(Dir, "id_ecdsa.25519"));
 active_key(_, X)
     -> ct:pal(?_("active_key arg not found: ~p", [X])),
        exit(1).
@@ -517,6 +543,16 @@ active_key(File)
 %%-------------------------------------------------------------------------
 unactive_key(Dir, rsa)
     -> ok = unactive_key(key_path(Dir, "id_rsa.key"));
+unactive_key(Dir, 'dsa.1024')
+    -> ok = unactive_key(key_path(Dir, "id_dsa.1024"));
+unactive_key(Dir, 'ecdsa.256')
+    -> ok = unactive_key(key_path(Dir, "id_ecdsa.256"));
+unactive_key(Dir, 'ecdsa.384')
+    -> ok = unactive_key(key_path(Dir, "id_ecdsa.384"));
+unactive_key(Dir, 'ecdsa.521')
+    -> ok = unactive_key(key_path(Dir, "id_ecdsa.521"));
+unactive_key(Dir, 'ecdsa.25519')
+    -> ok = unactive_key(key_path(Dir, "id_ecdsa.25519"));
 unactive_key(_, X)
     -> ct:pal(?_("unactive_key arg not found: ~p", [X])),
        exit(1).
