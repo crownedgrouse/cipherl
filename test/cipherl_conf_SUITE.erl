@@ -60,6 +60,8 @@
  init_per_suite(Config) -> 
      %ct:print(io_lib:format("Suite config  : ~p", [Config])),
      %L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
+     %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
+     %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521'], 
      L = [rsa], % overide if required or wanting limit list
      % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
@@ -121,13 +123,18 @@
     BD = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
     PK = pkmap(ST),
     PKPP = pkppmap(ST),
-    erlang:put(pkpp, PKPP),
+    persistent_term:put(pkpp, PKPP),
 
     % Add Bob's pubkey in known_hosts
     %file:delete(filename:join(AD, "known_hosts")),
     active_key(AD, ST),
     active_key(BD, ST),
-    {ok, BPrivKey} = ssh_file:user_key(PK, [{user_dir, BD},{PKPP,"bobbob"}]),
+    ct:log(?_("user_dir=~p pk=~p", [BD, PK])),
+    BPrivKey = 
+    case ssh_file:user_key(PK, [{user_dir, BD},{PKPP,"bobbob"}]) of 
+        {ok, P} ->  P ;
+        {error, Error} -> ct:fail(Error), []
+    end,
     BPubKey = ssh_file:extract_public_key(BPrivKey),
     ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
     Config ++ [{cipherl_ct, [{mod_passphrase,cipherl_alicesecret}, {ssh_dir,user},{check_rs, false},{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
@@ -529,8 +536,12 @@ active_key(_, X)
        exit(1).
 
 active_key(File)
-    -> Link = link_path(File),
-       %ct:pal(?_("Making symlink ~p -> ~p", [File, Link])),
+    -> % Remove any former link
+       Dir = filename:basename(File),
+       file:delete(key_path(Dir, "id_rsa")),
+       file:delete(key_path(Dir, "id_ecdsa")),
+       Link = link_path(File),
+       ct:log(?_("Making symlink ~p -> ~p", [File, Link])),
        case file:make_symlink(File, Link) of
             ok -> ok;
             {error, eexist} -> ok ;

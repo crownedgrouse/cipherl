@@ -749,6 +749,8 @@ check_conf_type(K = hidden_node, V) when is_boolean(V)
     ->  {K, V};
 check_conf_type(K = local_node, V) when is_boolean(V) 
     ->  {K, V};
+check_conf_type(K = check_rs, V) when is_boolean(V) 
+    ->  {K, V};
 check_conf_type(K = rpc_enabled, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = security_handler, V) when is_list(V) 
@@ -775,8 +777,8 @@ check_conf_type(K = ssh_dir, V) when is_atom(V)
                      [];
             true  -> {K, V}
         end;
-check_conf_type(K, _) ->
-        logger:warning("Invalid type for config parameter '~p'", [K]),
+check_conf_type(K, _X) ->
+        logger:warning("Invalid type for config parameter '~p', received: ~p", [K, _X]),
         [].
 
 
