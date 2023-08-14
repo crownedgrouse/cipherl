@@ -8,7 +8,8 @@
 %%%
 -module(cipherl_passphrase).
 
--callback passwd(A :: atom()) -> 
-    {dsa_pass_phrase, B :: string()} |
-    {rsa_pass_phrase, B :: string()} |
-    {ecdsa_pass_phrase, B :: string()}.
+%% ee Public key algorithms at https://www.erlang.org/doc/man/ssh_app#supported
+-callback passwd(KeyType:: atom(), Node :: node()) -> 
+    {dsa_pass_phrase, PassPhrase :: string()} |
+    {rsa_pass_phrase, PassPhrase :: string()} |
+    {ecdsa_pass_phrase, PassPhrase :: string()}.

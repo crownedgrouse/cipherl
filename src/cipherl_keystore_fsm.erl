@@ -133,11 +133,13 @@ init(_) ->
         end,
         % Go on
         crypto:start(),
-        % Get private key passphrase type and passphrase value
-        Passphrase = get_passphrase(Conf),
-        % Get ssh key type from config or id found on disk from passphrase type
+
+        % Get ssh key type from config 
         KT = maps:get(ssh_pubkey_alg, Conf, 'ssh-ecdsa-nistp521'),
         logger:debug("Private key type: ~p", [KT]),
+
+        % Get private key passphrase type and passphrase value
+        Passphrase = get_passphrase(KT, Conf),
 
         logger:info("Loading private key"),
         % Compose ssh_file function argument
@@ -894,9 +896,9 @@ ssh_pubkey_alg()
 %%-------------------------------------------------------------------------
 %% @doc Get private key passphrase
 %%-------------------------------------------------------------------------
--spec get_passphrase(map()) -> list() | no_return().
+-spec get_passphrase(atom(), map()) -> list() | no_return().
 
-get_passphrase(Conf)
+get_passphrase(KT, Conf)
     when is_map(Conf)
     ->
     try 
@@ -910,7 +912,7 @@ get_passphrase(Conf)
             % Check module is of cipherl_passphrase behavior
 
             % Get password for current node
-            Passwd = MP:passwd(node()),
+            Passwd = MP:passwd(KT, node()),
             case Passwd of
                 {PT, _} -> logger:debug("Passphrase type : ~p", [PT]);
                 _       -> ok

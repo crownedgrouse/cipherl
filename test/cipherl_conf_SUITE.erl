@@ -59,10 +59,10 @@
  %%--------------------------------------------------------------------
  init_per_suite(Config) -> 
      %ct:print(io_lib:format("Suite config  : ~p", [Config])),
-     %L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
+     L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521'], 
-     L = [rsa], % overide if required or wanting limit list
+     %L = [rsa], % overide if required or wanting limit list
      % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
