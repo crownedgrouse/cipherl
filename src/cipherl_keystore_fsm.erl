@@ -714,19 +714,20 @@ get_pubkey_from_node(Node, StateData)
 -spec load_config() -> map().
 
 load_config() ->
-    Default = #{add_host_key     => false
-               ,attempt          => 10
-               ,check_rs         => true
-               ,hidden_node      => false
-               ,local_node       => false
-               ,nonce_tolerance  => 0
-               ,rpc_enabled      => false
-               ,security_handler => []
-               ,ssh_dir          => user
-               ,user_dir         => []
-               ,system_dir       => []
-               ,ssh_pubkey_alg   => 'ssh-ecdsa-nistp521'
-               ,trust_mode       => 0
+    Default = #{add_host_key      => false
+               ,attempt           => 10
+               ,check_rs          => true
+               ,hidden_node       => false
+               ,local_node        => false
+               ,nonce_tolerance   => 0
+               ,nonce_sched_id    => false
+               ,rpc_enabled       => false
+               ,security_handler  => []
+               ,ssh_dir           => user
+               ,user_dir          => []
+               ,system_dir        => []
+               ,ssh_pubkey_alg    => 'ssh-ecdsa-nistp521'
+               ,trust_mode        => 0
                },
     % Find keys in config, and check validity
     Keys   = maps:keys(Default),
@@ -750,6 +751,10 @@ check_conf_type(K = add_host_key, V) when is_boolean(V)
 check_conf_type(K = hidden_node, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = local_node, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = nonce_sched_id, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = nonce_tolerance, V) when is_integer(V),(V >= 0)
     ->  {K, V};
 check_conf_type(K = check_rs, V) when is_boolean(V) 
     ->  {K, V};
