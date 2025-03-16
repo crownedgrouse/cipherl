@@ -20,7 +20,7 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
--export([format_status/2]).
+-export([format_status/1]).
 
 -record(state, {
 }).
@@ -33,7 +33,7 @@
 start_link() ->
 	gen_server:start_link(?MODULE, [], []).
 
-format_status(Opt, [_PDict,_State,_Data]) ->
+format_status(Opt) ->
     case Opt of
     terminate ->
         hidden;

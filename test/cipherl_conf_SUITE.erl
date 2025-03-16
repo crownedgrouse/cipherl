@@ -59,30 +59,20 @@
  %%--------------------------------------------------------------------
  init_per_suite(Config) -> 
      %ct:print(io_lib:format("Suite config  : ~p", [Config])),
-     L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
+     %L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521'], 
-     %L = [rsa], % overide if required or wanting limit list
+     L = ['rsa'], % overide if required or wanting limit list
      % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
      ct:pal(?_("SSH Key Type: ~p", [RandSshType])),
-     % Compile Bob's passphrase module
-     Macro = pktype(RandSshType),
-     Path  = code:where_is_file("cipherl_bobsecret.erl"),
-     Dir   = filename:dirname(Path),
-     File  = filename:join(Dir, filename:basename(Path, ".erl")),
-     case compile:file(File, [{debug_info_key,"bobsecretpassphrase"},{d, 'KEYTYPE', Macro}, return_errors,{outdir, Dir}]) of
-        {error, ErrorList, WarningList} -> ct:pal(?_("Compilating ~p :~nErros: ~p~nWarnings: ~p", [File, ErrorList, WarningList])),
-                                         ct:fail(cipherl_bobsecret);
-        {ok, _} -> ok
-     end,
      
      % Configure applications
      application:stop(ssh),
      application:set_env([  
         {kernel,
-                [{logger_level, all}
+                [{logger_level, all} % Set to all for more verbosity
                 ,{dist_auto_connect, once}
                 ,{logger,
                     [{handler, default, logger_std_h,
@@ -99,7 +89,23 @@
             }
         ]),
      application:start(ssh),
-     [{sshtype, RandSshType} | Config].
+
+    case lists:member(pkmap(RandSshType), ssh_pubkey_alg()) of
+        false -> ct:pal(?_("~p not found in ssh:default_algorithms. Skipping", [pkmap(RandSshType)])),
+                 {skip, ssh_algo_undeclared};
+        true  ->     
+             % Compile Bob's passphrase module
+             Macro = pktype(RandSshType),
+             Path  = code:where_is_file("cipherl_bobsecret.erl"),
+             Dir   = filename:dirname(Path),
+             File  = filename:join(Dir, filename:basename(Path, ".erl")),
+             case compile:file(File, [{debug_info_key,"bobsecretpassphrase"},{d, 'KEYTYPE', Macro}, return_errors,{outdir, Dir}]) of
+                {error, ErrorList, WarningList} -> ct:pal(?_("Compilating ~p :~nErros: ~p~nWarnings: ~p", [File, ErrorList, WarningList])),
+                                                 ct:fail(cipherl_bobsecret);
+                {ok, _} -> ok
+             end,
+             [{sshtype, RandSshType} | Config]
+    end.
 
  %%--------------------------------------------------------------------
  %% Function: end_per_suite(Config0) -> term() | {save_config,Config1}
@@ -129,7 +135,7 @@
     %file:delete(filename:join(AD, "known_hosts")),
     active_key(AD, ST),
     active_key(BD, ST),
-    ct:log(?_("user_dir=~p pk=~p", [BD, PK])),
+    ct:pal(?_("user_dir=~p pk=~p pkpp=~p sshtype=~p", [BD, PK, PKPP, ST])),
     BPrivKey = 
     case ssh_file:user_key(PK, [{user_dir, BD},{PKPP,"bobbob"}]) of 
         {ok, P} ->  P ;
@@ -311,7 +317,7 @@ add_host_key_true_ok(Config) ->
     % remove current known_hosts created by init_per_group
     AD = proplists:get_value(user_dir, Conf),
     KH = filename:join(AD, "known_hosts"),
-    ct:pal(?_("Alices's KH file : ~p",[KH])),
+    % ct:pal(?_("Alices's KH file : ~p",[KH])),
     ok = file:delete(KH),
     ok = file:write_file(KH, ""),
     %ok = file:change_mode(KH, 8#00644),
@@ -321,8 +327,8 @@ add_host_key_true_ok(Config) ->
     PKA = proplists:get_value(ssh_pubkey_alg, Conf),
     ct:log(?_("pubkey: ~p", [PKA])),
     BD  = filename:join(code:priv_dir(cipherl), "test/bob/.ssh/"),
-    KHB = filename:join(BD, "known_hosts"),
-    ct:pal(?_("Bob's KH file : ~p ",[KHB])),
+    % KHB = filename:join(BD, "known_hosts"),
+    % ct:pal(?_("Bob's KH file : ~p ",[KHB])),
     _C0 = peer:call(Peer, application, set_env, [cipherl, ssh_dir, user, [{persistent, true}]]),
     _C1 = peer:call(Peer, application, set_env, [cipherl, user_dir, BD, [{persistent, true}]]),
     _C2 = peer:call(Peer, application, set_env, [cipherl, ssh_pubkey_alg, PKA, [{persistent, true}]]),
@@ -514,38 +520,58 @@ pktype('ecdsa-sha2-nistp384') -> ecdsa;
 pktype('ecdsa-sha2-nistp521') -> ecdsa;
 pktype(_) -> none.
 
+%%-------------------------------------------------------------------------
+%% @doc Map key type to id file name
+%%    USERDIR/id_dsa
+%%    USERDIR/id_rsa
+%%    USERDIR/id_ecdsa
+%%    USERDIR/id_ed25519
+%%    USERDIR/id_ed448
+%% @end
+%%-------------------------------------------------------------------------
+pkfile(rsa)           -> "id_rsa" ;
+pkfile('dsa.1024')    -> "id_dsa";
+pkfile('ecdsa.256')   -> "id_ecdsa" ;
+pkfile('ecdsa.384')   -> "id_ecdsa" ;
+pkfile('ecdsa.521')   -> "id_ecdsa" ;
+pkfile('ecdsa.25519') -> "id_ed25519" ;
+pkfile(_) -> "".
 
 %%-------------------------------------------------------------------------
 %% @doc 
 %% @end
 %%-------------------------------------------------------------------------
-active_key(Dir, rsa)
-    -> ok = active_key(key_path(Dir, "id_rsa.key"));
-active_key(Dir, 'dsa.1024')
-    -> ok = active_key(key_path(Dir, "id_dsa.1024"));
-active_key(Dir, 'ecdsa.256')
-    -> ok = active_key(key_path(Dir, "id_ecdsa.256"));
-active_key(Dir, 'ecdsa.384')
-    -> ok = active_key(key_path(Dir, "id_ecdsa.384"));
-active_key(Dir, 'ecdsa.521')
-    -> ok = active_key(key_path(Dir, "id_ecdsa.521"));
-active_key(Dir, 'ecdsa.25519')
-    -> ok = active_key(key_path(Dir, "id_ecdsa.25519"));
+active_key(Dir, X = rsa)
+    -> ok = active_keyfile(key_path(Dir, "id_rsa.key"), pkfile(X));
+active_key(Dir, X = 'dsa.1024') 
+    -> ok = active_keyfile(key_path(Dir, "id_dsa.1024"), pkfile(X));
+active_key(Dir, X = 'ecdsa.256')
+    -> ok = active_keyfile(key_path(Dir, "id_ecdsa.256"), pkfile(X));
+active_key(Dir, X = 'ecdsa.384')
+    -> ok = active_keyfile(key_path(Dir, "id_ecdsa.384"), pkfile(X));
+active_key(Dir, X = 'ecdsa.521')
+    -> ok = active_keyfile(key_path(Dir, "id_ecdsa.521"), pkfile(X));
+active_key(Dir, X = 'ecdsa.25519')
+    -> ok = active_keyfile(key_path(Dir, "id_ecdsa.25519"), pkfile(X));
 active_key(_, X)
     -> ct:pal(?_("active_key arg not found: ~p", [X])),
        exit(1).
 
-active_key(File)
+active_keyfile(File, ID)
     -> % Remove any former link
-       Dir = filename:basename(File),
+       Dir = filename:dirname(File),
+       IDFile = key_path(Dir, ID),
+       % Remove any former id file
        file:delete(key_path(Dir, "id_rsa")),
+       file:delete(key_path(Dir, "id_dsa")),
        file:delete(key_path(Dir, "id_ecdsa")),
-       Link = link_path(File),
-       ct:log(?_("Making symlink ~p -> ~p", [File, Link])),
-       case file:make_symlink(File, Link) of
-            ok -> ok;
-            {error, eexist} -> ok ;
-            E -> E
+       file:delete(key_path(Dir, "id_ed25519")),
+       case file:copy(File, IDFile) of
+        {ok, _} -> 
+            file:change_mode(IDFile, 8#00400),
+             ok ;
+        {error, Reason} ->
+            ct:pal(?_("cannot copy key as id file: ~p", [Reason]))
        end.
 
 %%-------------------------------------------------------------------------
@@ -569,11 +595,13 @@ unactive_key(_, X)
        exit(1).
 
 
-unactive_key(FileOrLink)
-    -> case  file:read_link(FileOrLink) of
-              {error,_} -> unactive_key(link_path(FileOrLink)) ;
-              {ok, _}   -> file:delete(FileOrLink)
-       end.
+unactive_key(_FileOrLink)
+    -> 
+        %case  file:read_link(FileOrLink) of
+        %       {error,_} -> unactive_key(link_path(FileOrLink)) ;
+        %       {ok, _}   -> file:delete(FileOrLink)
+        %end
+        ok.
 
 %%-------------------------------------------------------------------------
 %% @doc 
@@ -603,3 +631,14 @@ start_with_handler(Conf)
     ok = gen_event:add_sup_handler(cipherl_event, cipherl_ct_sec_handler, []),
     gen_event:sync_notify(cipherl_event, {pid, self()}),
     ok.
+
+%%-------------------------------------------------------------------------
+%% @doc 
+%% @end
+%%-------------------------------------------------------------------------
+ssh_pubkey_alg()
+    -> 
+    case lists:keyfind(public_key, 1, ssh:default_algorithms()) of
+         false -> [];
+         {public_key, L} -> L       
+    end.

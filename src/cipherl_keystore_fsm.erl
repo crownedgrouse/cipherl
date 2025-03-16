@@ -25,7 +25,7 @@
 -export([check_auth/2, check_security/1, check_security/2]).
 
 
--export([format_status/2]).
+-export([format_status/1]).
 
 -include("cipherl_records.hrl").
 
@@ -58,6 +58,7 @@
     -define(DISCONNECT(Node),logger:info("cipherl would have disconnect node ~p", [Node])).
     -warning("Compiling specially for common tests. Do not use in production.").
     -define(INITT,
+        put(test, true),
         case whereis(ct_util_server) of
             undefined -> 
                 logger:warning("!!! Compiled for common tests. Do not use in production.");
@@ -84,7 +85,7 @@ start_link() ->
 callback_mode() ->
 	state_functions.
 
-format_status(Opt, [_PDict,_State,_Data]) ->
+format_status(Opt) ->
     case Opt of
     terminate ->
         hidden;
@@ -157,7 +158,7 @@ init(_) ->
             case ssh_file:Target(KT, Args) of
                 {ok, Priv}      -> Priv;
                 {error, Reason} -> 
-                    logger:error("ssh_file:~p failure: ~p", [Target, Reason]),
+                    logger:error("ssh_file:~p failure: ~p directory:~p", [Target, Reason, Userdir]),
                     throw("No private key found"), []
             end,
         Public = ?PUBKEY(Private),
@@ -167,7 +168,10 @@ init(_) ->
             no  ->  logger:notice("registered name at node ~p already set", [node()]),
                     global:re_register_name({cipherl_ks, node()}, self())
         end,
-        logger:notice("~p Init: OK", [?MODULE]),
+        case get(test) of
+            true -> ok ;
+            _ -> logger:notice("~p Init: OK", [?MODULE])
+        end,
 	    {ok, monitor_nodes, #{nodes   => #{}
                              ,pending => #{}
                              ,private => Private
@@ -830,10 +834,13 @@ check_security(Conf, Mode)   % TODO
             _ when (CRS =:= false) -> 
                 case Mode of
                     true -> 
-                        logger:warning("No restricted_shell found and check_rs set to false !",[]),
-                        logger:notice("Disable use of a restricted shell is a serious security breach. You are aware, do not blame cipherl !",[]),
-                        logger:info("No warning will be raised on this at later security checks.")
-                        ;
+                        case get(test) of
+                            true -> ok ;
+                            _ ->
+                            logger:warning("No restricted_shell found and check_rs set to false !",[]),
+                            logger:notice("Disable use of a restricted shell is a serious security breach. You are aware, do not blame cipherl !",[]),
+                            logger:info("No warning will be raised on this at later security checks.")
+                        end;
                     _ -> skip
                 end;
             _ when (CRS =:= true) -> 
