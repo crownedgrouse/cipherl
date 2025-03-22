@@ -146,7 +146,7 @@ init(_) ->
         % Compose ssh_file function argument
         Userdir   = maps:get(user_dir, Conf, []),
         Systemdir = maps:get(system_dir, Conf, []),
-        Args      = lists:flatten([Passphrase] ++ [Userdir] ++ [Systemdir]),
+        Args      = lists:flatten([{ecdsa_pass_phrase,Passphrase}] ++ [{user_dir, Userdir}] ++ [Systemdir]),
         logger:debug("Args: ~p", [Args]),
         % Define ssh_file target function
         Target = case maps:get(ssh_dir, Conf, 'user') of
@@ -159,6 +159,7 @@ init(_) ->
                 {ok, Priv}      -> Priv;
                 {error, Reason} -> 
                     logger:error("ssh_file:~p failure: ~p directory:~p", [Target, Reason, Userdir]),
+                    logger:notice("key_type:~p  args:~p",[KT, Args]),
                     throw("No private key found"), []
             end,
         Public = ?PUBKEY(Private),
@@ -925,6 +926,7 @@ get_passphrase(KT, Conf)
 
             % Get password for current node
             Passwd = MP:passwd(KT, node()),
+            logger:notice("MP:~p  KT:~p  PASSWD:~p",[MP, KT, Passwd]),
             case Passwd of
                 {PT, _} -> logger:debug("Passphrase type : ~p", [PT]);
                 _       -> ok

@@ -62,7 +62,7 @@
      %L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521'], 
-     L = ['rsa'], % overide if required or wanting limit list
+     L = ['ecdsa.521'], % overide if required or wanting limit list
      % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
@@ -81,8 +81,8 @@
                 ]
             },
             {ssh, [{modify_algorithms, 
-                  [{append, [{kex,['diffie-hellman-group1-sha1']}]}
-                  ,{prepend, [{public_key,['ssh-rsa']}]}
+                  [{append, [{kex,['diffie-hellman-group1-sha1','diffie-hellman-group14-sha256']}]}
+                  ,{prepend, [{public_key,['ecdsa-sha2-nistp521']}]}
                   ]
                   }
                 ]
@@ -313,7 +313,7 @@ add_host_key_true_ok(Config) ->
     application:stop(cipherl),
     Conf = [{add_host_key, true}] ++ 
            proplists:get_value(cipherl_ct, Config, []) ,
-    ct:log(?_("Config at Alice's side: ~p", [Conf])),
+    ct:pal(?_("Config at Alice's side: ~p", [Conf])),
     % remove current known_hosts created by init_per_group
     AD = proplists:get_value(user_dir, Conf),
     KH = filename:join(AD, "known_hosts"),
@@ -342,7 +342,7 @@ add_host_key_true_ok(Config) ->
     _C7 = peer:call(Peer, application, set_env, [cipherl, check_rs, false, [{persistent, true}]]),
     _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, true, [{persistent, true}]]),
     _CLast = peer:call(Peer, application, load, [cipherl]),
-    ct:log(?_("Config at Bob's side: ~p", [lists:sort(peer:call(Peer, application, get_all_env, [cipherl]))])),
+    ct:pal(?_("Config at Bob's side: ~p", [lists:sort(peer:call(Peer, application, get_all_env, [cipherl]))])),
     BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
     ct:log(?_("Cipherl start at Bob side: ~p", [BS])),
     % start cipherl at Alice  
