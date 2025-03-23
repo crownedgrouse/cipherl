@@ -2,7 +2,7 @@
 -behavior(cipherl_passphrase).
 -export([passwd/2]).
 
-passwd('ssh-dsa', _) ->
+passwd('ssh-dss', _) ->
     {dsa_pass_phrase, "bobbob"};
 passwd('ssh-rsa', _) ->
     {rsa_pass_phrase, "bobbob"};
@@ -18,4 +18,6 @@ passwd('ecdsa-sha2-nistp256', _) ->
     {ecdsa_pass_phrase, "bobbob"};
 passwd('ssh-ed448', _) ->
     {ecdsa_pass_phrase, "bobbob"};
-passwd(_, _) -> [].
+passwd(KT, N) -> 
+    logger:error("Unexpected arguments to get bob's passphrase: (~p, ~p)", [KT, N]),
+    [].

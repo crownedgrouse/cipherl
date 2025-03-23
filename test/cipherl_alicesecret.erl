@@ -3,7 +3,7 @@
 -export([passwd/2]).
 
 
-passwd('ssh-dsa', _) ->
+passwd('ssh-dss', _) ->
     {dsa_pass_phrase, "alice"};
 passwd('ssh-rsa', _) ->
     {rsa_pass_phrase, "alice"};
@@ -19,4 +19,6 @@ passwd('ecdsa-sha2-nistp256', _) ->
     {ecdsa_pass_phrase, "alice"};
 passwd('ssh-ed448', _) ->
     {ecdsa_pass_phrase, "alice"};
-passwd(_, _) -> [].
+passwd(KT, N) -> 
+    logger:error("Unexpected arguments to get alice's passphrase: (~p, ~p)", [KT, N]),
+    [].

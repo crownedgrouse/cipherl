@@ -62,7 +62,7 @@
      %L = [rsa, 'dsa.1024', 'ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521', 'ecdsa.25519'], % TODO fix
      %L = ['ecdsa.256', 'ecdsa.384', 'ecdsa.521'], 
-     L = ['ecdsa.521'], % overide if required or wanting limit list
+     L = ['rsa'], % overide if required or wanting limit list
      % Choose randomly a SSH key type
      Offset = erlang:ceil(rand:uniform() * erlang:length(L)),
      RandSshType = erlang:element(Offset, erlang:list_to_tuple(L)),
@@ -82,7 +82,7 @@
             },
             {ssh, [{modify_algorithms, 
                   [{append, [{kex,['diffie-hellman-group1-sha1','diffie-hellman-group14-sha256']}]}
-                  ,{prepend, [{public_key,['ecdsa-sha2-nistp521']}]}
+                  ,{prepend, [{public_key,[pkmap(RandSshType)]}]}
                   ]
                   }
                 ]
@@ -100,9 +100,11 @@
              Dir   = filename:dirname(Path),
              File  = filename:join(Dir, filename:basename(Path, ".erl")),
              case compile:file(File, [{debug_info_key,"bobsecretpassphrase"},{d, 'KEYTYPE', Macro}, return_errors,{outdir, Dir}]) of
-                {error, ErrorList, WarningList} -> ct:pal(?_("Compilating ~p :~nErros: ~p~nWarnings: ~p", [File, ErrorList, WarningList])),
-                                                 ct:fail(cipherl_bobsecret);
-                {ok, _} -> ok
+                {error, ErrorList, WarningList} 
+                    -> ct:pal(?_("Compilating ~p :~nErros: ~p~nWarnings: ~p", [File, ErrorList, WarningList])),
+                       ct:fail(cipherl_bobsecret);
+                {ok, _} 
+                    -> ok
              end,
              [{sshtype, RandSshType} | Config]
     end.
@@ -132,16 +134,17 @@
     persistent_term:put(pkpp, PKPP),
 
     % Add Bob's pubkey in known_hosts
-    %file:delete(filename:join(AD, "known_hosts")),
+    file:delete(filename:join(AD, "known_hosts")),
+    file:delete(filename:join(BD, "known_hosts")),
     active_key(AD, ST),
     active_key(BD, ST),
-    ct:pal(?_("user_dir=~p pk=~p pkpp=~p sshtype=~p", [BD, PK, PKPP, ST])),
     BPrivKey = 
     case ssh_file:user_key(PK, [{user_dir, BD},{PKPP,"bobbob"}]) of 
         {ok, P} ->  P ;
         {error, Error} -> ct:fail(Error), []
     end,
     BPubKey = ssh_file:extract_public_key(BPrivKey),
+    %ct:pal(?_("Adding Bob's pubkey in Alice known_hosts file: ~p", [BPubKey])),
     ok = ssh_file:add_host_key(net_adm:localhost(), 22, BPubKey, [{user_dir, AD}]),
     Config ++ [{cipherl_ct, [{mod_passphrase,cipherl_alicesecret}, {ssh_dir,user},{check_rs, false},{user_dir, AD} ,{ssh_pubkey_alg, PK}]}];
  init_per_group(_GroupName, Config) ->
@@ -289,7 +292,7 @@ user_dir_ko()
 %% Replace an option in common testcase configuration
 %%--------------------------------------------------------------------
 test_case_common(X) ->
-    I = [{timetrap,{seconds,60}}
+    I = [{timetrap,{seconds,30}}
         ,{require, cipherl}
         ,{default_config, cipherl, []}
         ], 
@@ -337,14 +340,14 @@ add_host_key_true_ok(Config) ->
     _C5 = peer:call(Peer, code, add_path, [filename:dirname(code:where_is_file("cipherl_bobsecret.erl"))]),
     _C6 = peer:call(Peer, application, set_env, [ssh, modify_algorithms, 
       [{append, [{kex,['diffie-hellman-group1-sha1']}]}
-      ,{prepend, [{public_key,['ssh-rsa']}]}
+      ,{prepend, [{public_key,[PKA]}]}
       ], [{persistent, true}]]),
     _C7 = peer:call(Peer, application, set_env, [cipherl, check_rs, false, [{persistent, true}]]),
     _C8 = peer:call(Peer, application, set_env, [cipherl, add_host_key, true, [{persistent, true}]]),
     _CLast = peer:call(Peer, application, load, [cipherl]),
     ct:pal(?_("Config at Bob's side: ~p", [lists:sort(peer:call(Peer, application, get_all_env, [cipherl]))])),
     BS = peer:call(Peer, application, ensure_all_started, [cipherl]),
-    ct:log(?_("Cipherl start at Bob side: ~p", [BS])),
+    %ct:pal(?_("Cipherl start at Bob side: ~p", [BS])),
     % start cipherl at Alice  
     start_with_handler(Conf),
     % Affect current cookie to Bob

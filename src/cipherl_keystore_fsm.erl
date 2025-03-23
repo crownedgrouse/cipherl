@@ -146,8 +146,7 @@ init(_) ->
         % Compose ssh_file function argument
         Userdir   = maps:get(user_dir, Conf, []),
         Systemdir = maps:get(system_dir, Conf, []),
-        Args      = lists:flatten([{ecdsa_pass_phrase,Passphrase}] ++ [{user_dir, Userdir}] ++ [Systemdir]),
-        logger:debug("Args: ~p", [Args]),
+        SSHArgs   = lists:flatten([Passphrase] ++ [{user_dir, Userdir}] ++ [{system_dir, Systemdir}]),
         % Define ssh_file target function
         Target = case maps:get(ssh_dir, Conf, 'user') of
                     system -> host_key;
@@ -155,11 +154,10 @@ init(_) ->
                  end,
         % Get private key
         Private = 
-            case ssh_file:Target(KT, Args) of
+            case ssh_file:Target(KT, SSHArgs) of
                 {ok, Priv}      -> Priv;
                 {error, Reason} -> 
-                    logger:error("ssh_file:~p failure: ~p directory:~p", [Target, Reason, Userdir]),
-                    logger:notice("key_type:~p  args:~p",[KT, Args]),
+                    logger:error("Getting ~p type private key: ~p",[KT, Reason]),
                     throw("No private key found"), []
             end,
         Public = ?PUBKEY(Private),
@@ -724,15 +722,16 @@ load_config() ->
                ,check_rs          => true
                ,hidden_node       => false
                ,local_node        => false
-               ,nonce_tolerance   => 0
+               ,mod_passphrase    => ''
                ,nonce_sched_id    => false
+               ,nonce_tolerance   => 0
                ,rpc_enabled       => false
                ,security_handler  => []
-               ,ssh_dir           => user
-               ,user_dir          => []
                ,system_dir        => []
+               ,ssh_dir           => user
                ,ssh_pubkey_alg    => 'ssh-ecdsa-nistp521'
                ,trust_mode        => 0
+               ,user_dir          => []
                },
     % Find keys in config, and check validity
     Keys   = maps:keys(Default),
@@ -756,6 +755,8 @@ check_conf_type(K = add_host_key, V) when is_boolean(V)
 check_conf_type(K = hidden_node, V) when is_boolean(V) 
     ->  {K, V};
 check_conf_type(K = local_node, V) when is_boolean(V) 
+    ->  {K, V};
+check_conf_type(K = mod_passphrase, V) when is_atom(V),(V =/= '')
     ->  {K, V};
 check_conf_type(K = nonce_sched_id, V) when is_boolean(V) 
     ->  {K, V};
@@ -915,10 +916,12 @@ get_passphrase(KT, Conf)
     when is_map(Conf)
     ->
     try 
-        % Get mod_passphase
-        MP = maps:get(mod_passphase, Conf, ''),
+        % Get mod_passphrase
+        MP = maps:get(mod_passphrase, Conf, ''),
         case MP of
-            '' -> "" ;
+            '' -> 
+                logger:notice("'mod_passphrase' not found ! See 'https://github.com/crownedgrouse/cipherl/wiki/3-Security#private-key-passphrase'"),
+                "" ;
             _  -> 
             % Check abstract code is not available (either missing or crypted)
 
@@ -926,7 +929,6 @@ get_passphrase(KT, Conf)
 
             % Get password for current node
             Passwd = MP:passwd(KT, node()),
-            logger:notice("MP:~p  KT:~p  PASSWD:~p",[MP, KT, Passwd]),
             case Passwd of
                 {PT, _} -> logger:debug("Passphrase type : ~p", [PT]);
                 _       -> ok
